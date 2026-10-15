@@ -1,0 +1,5 @@
+B32 controlled resources 1.0.0
+Template: owned A4 text/table/PNG report layout 1.0.0.
+Font: Report Sans SC Regular, a renamed static weight=400 derivative of Noto Sans SC 2.004; OFL.txt retained. Source: https://github.com/google/fonts/tree/main/ofl/notosanssc. Build: fontTools varLib.instancer (development only); name table updated to match DOCX embedded family.
+Renderer: external dependencies, not built into the agent; Windows x64 CPython 3.12.14, ReportLab 4.4.9, Pillow 12.3.0, pypdfium2 5.13.0, charset-normalizer 3.5.1. Redistributed from workspace bundle 26.909.12148. Their licenses (including PDFium third-party notices) remain inside renderer-win-x64.zip. Runtime extraction is private and offline, not installed globally.
+SHA256 pinning: manifest.json. Missing/mismatched resources fail closed; no PATH/system font fallback.

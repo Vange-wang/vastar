@@ -1,0 +1,294 @@
+{
+  "budget_topup": {
+    "enabled": true,
+    "ratio": 0.5,
+    "legacy_max_estimated_tokens": 200000,
+    "legacy_max_cost_yuan": 20,
+    "legacy_max_active_seconds": 14400
+  },
+  "orchestration": {
+    "schema_version": 1,
+    "enabled": true,
+    "max_workers": 2,
+    "max_depth": 1,
+    "max_cost_yuan": 20,
+    "max_active_seconds": 14400,
+    "budget_policy_version": 1
+  },
+  "agent": {
+    "name": "Vastar",
+    "owner": "user",
+    "version": "0.2.1",
+    "locale": "zh-CN",
+    "max_model_steps": 1,
+    "max_attempts_per_step": 4,
+    "recent_raw_turns": 20
+  },
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "fallback_provider": "glm",
+    "continuation": {
+      "enabled": true,
+      "max_count": null
+    },
+    "providers": {
+      "deepseek": {
+        "base_url_env": "DEEPSEEK_BASE_URL",
+        "base_url_default": "https://api.deepseek.com",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "models": [
+          "deepseek-flash",
+          "deepseek-v4-pro"
+        ],
+        "context_window": 1000000,
+        "max_output_tokens_limit": 384000,
+        "temperature": 0.3,
+        "temperature_effective_in_thinking_mode": false,
+        "top_p": 1.0,
+        "max_output_tokens": 16000,
+        "timeouts": {
+          "connect_s": 10,
+          "first_delta_s": 30,
+          "stream_idle_s": 60,
+          "attempt_total_s": null,
+          "run_total_s": null,
+          "retry_wait_budget_s": 30
+        },
+        "stream": true,
+        "show_reasoning": true
+      },
+      "glm": {
+        "base_url_env": "GLM_BASE_URL",
+        "base_url_default": "https://open.bigmodel.cn/api/paas/v4/",
+        "api_key_env": "GLM_API_KEY",
+        "models": [
+          "glm-5.3-flash",
+          "glm-5.3"
+        ],
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "max_output_tokens": 16000,
+        "context_window": 1000000,
+        "thinking": {
+          "type": "enabled"
+        },
+        "timeouts": {
+          "connect_s": 10,
+          "first_delta_s": 30,
+          "stream_idle_s": 60,
+          "attempt_total_s": null,
+          "run_total_s": null,
+          "retry_wait_budget_s": 30
+        },
+        "stream": true,
+        "show_reasoning": true,
+        "max_output_tokens_limit": 131072
+      },
+      "mimo": {
+        "base_url_env": "MIMO_BASE_URL",
+        "base_url_default": "https://api.xiaomimimo.com/v1",
+        "api_key_env": "MIMO_API_KEY",
+        "protocol": "openai_compatible",
+        "models": [
+          "mimo-v2.6-pro"
+        ],
+        "temperature": 0.3,
+        "top_p": 1.0,
+        "max_output_tokens": 16000,
+        "max_output_tokens_limit": 131072,
+        "context_window": 1048576,
+        "timeouts": {
+          "connect_s": 10,
+          "first_delta_s": 30,
+          "stream_idle_s": 60,
+          "attempt_total_s": null,
+          "run_total_s": null,
+          "retry_wait_budget_s": 30
+        },
+        "stream": true,
+        "show_reasoning": true
+      }
+    },
+    "max_retries": 2
+  },
+  "context": {
+    "max_input_tokens": null,
+    "strategy": "layered_dedup_snapshot_compact_then_fail",
+    "strategy_layers": [
+      "source_dedup",
+      "apply_approved_snapshot",
+      "explicit_user_compact",
+      "fail_with_error"
+    ],
+    "summarize_on_overflow": false,
+    "on_overflow": "fail_with_error",
+    "warn_threshold_ratio": 0.75,
+    "compact_target_ratio": 0.55,
+    "rolling_tool_history": true,
+    "compact_v2": {
+      "auto_enabled": true,
+      "high_watermark": 0.8,
+      "low_watermark": 0.65,
+      "recent_tool_groups": 2,
+      "rebuild_every": 3
+    }
+  },
+  "token": {
+    "counter": "heuristic_cjk_v1",
+    "guarantee_default": "estimated",
+    "strict_mode": true,
+    "on_missing_upper_bound": "fail_with_error",
+    "error_code": "TOKEN_GUARANTEE_UNAVAILABLE",
+    "hard_limit": true,
+    "count_scope": [
+      "system_prompt",
+      "history",
+      "retrieved_context",
+      "user_input"
+    ],
+    "safety_margin_ratio": 0.1
+  },
+  "prompt": {
+    "dir": "prompts/",
+    "system": "system.md",
+    "task": "task.md",
+    "examples": "examples.md",
+    "snapshot_dir": "prompts/snapshots/",
+    "version": "v0.1.0"
+  },
+  "memory": {
+    "backend": "sqlite",
+    "path": "memory/history.db",
+    "short_term_turns": 20,
+    "long_term_enabled": false,
+    "origin_tagging": true
+  },
+  "tools": {
+    "final_answer": {
+      "enabled": false,
+      "reserve_tool_rounds": 0,
+      "max_read_only_rounds": 0,
+      "min_remaining_calls": 0,
+      "remaining_token_ratio": 0,
+      "min_remaining_seconds": 0
+    },
+    "enabled": [
+      "read_file",
+      "list_dir",
+      "write_file",
+      "edit_file",
+      "mkdir",
+      "move_file",
+      "delete_path",
+      "search_text",
+      "glob_files",
+      "stat_path",
+      "use_skill",
+      "read_artifact",
+      "analyze_spreadsheet",
+      "ask_task_question",
+      "browser_capabilities",
+      "browser_click",
+      "browser_fill",
+      "browser_navigate",
+      "browser_reconcile",
+      "browser_screenshot",
+      "browser_state",
+      "browser_workflow",
+      "code_change",
+      "document_capabilities",
+      "extract_document",
+      "forget_memory",
+      "generate_report",
+      "provider_control",
+      "read_process",
+      "read_project_knowledge",
+      "read_web_page",
+      "report_capabilities",
+      "search_history",
+      "sheet_capabilities",
+      "start_process",
+      "terminate_process",
+      "update_task_plan",
+      "validate_task_step",
+      "verify_research",
+      "web_search",
+      "write_memory"
+    ],
+    "permission_mode": "auto",
+    "ask_timeout_s": 60,
+    "max_tool_rounds": null,
+    "max_calls_per_turn": null,
+    "timeout_seconds": null,
+    "task_budget": {
+      "max_calls": 80,
+      "max_estimated_tokens": 800000,
+      "max_cost_yuan": 20,
+      "max_active_seconds": 14400
+    }
+  },
+  "skills": {
+    "enabled": [
+      "codebase-understanding",
+      "file-organization",
+      "browser-actions",
+      "browser-readonly",
+      "browser-workflow",
+      "code-change-validation",
+      "document-extraction",
+      "project-knowledge",
+      "report-generation",
+      "research-verification",
+      "skill-maintenance",
+      "spreadsheet-analysis"
+    ],
+    "max_active_skills": 1,
+    "dir": "skills/"
+  },
+  "env": {
+    "inject_known_paths": true
+  },
+  "runtime": {
+    "log_dir": "logs/",
+    "log_level": "INFO",
+    "cli_entry": "main.py",
+    "session_mode": "queue"
+  },
+  "ui": {
+    "thinking_visible_lines": 5
+  },
+  "config_revision": "task76-v1",
+  "execution": {
+    "enabled": true,
+    "network": false,
+    "mode": "appcontainer"
+  },
+  "network": {
+    "enabled": false,
+    "allowed_hosts": [],
+    "private_hosts": [],
+    "allowed_ports": [
+      443
+    ],
+    "proxy_mode": "direct",
+    "search_endpoint": "",
+    "credential_env": "",
+    "authorization": "",
+    "declared_cost": ""
+  },
+  "browser": {
+    "enabled": false,
+    "playwright_package": "",
+    "node_executable": "",
+    "chromium_directory": "",
+    "readonly_urls": [],
+    "writes_enabled": true,
+    "write_urls": [],
+    "input_env": {}
+  },
+  "providers": {
+    "enabled": true,
+    "servers": {}
+  }
+}

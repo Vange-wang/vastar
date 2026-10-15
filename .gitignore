@@ -1,0 +1,32 @@
+# Local configuration and secrets
+.env
+.env.*
+*.env
+*.env.*
+config/settings.json
+config/settings.local.json
+# Environments and generated state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.db
+*.db-*
+*.db.*
+*.bak
+*.log
+logs/
+data/
+.work/
+.vastar/
+memory/artifacts/
+memory/*.json
+memory/*.migrations/
+# Development materials
+/tests/
+/collab/
+/docs/
+.pytest_cache/
+.ruff_cache/
+# Optional external runtime (install separately)
+skills/report-generation/assets/renderer-win-x64.zip

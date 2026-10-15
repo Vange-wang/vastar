@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "path": "structured source -> ReportLab PDF + OOXML DOCX -> PDFium raster proof",
+  "template_version": "1.0.0",
+  "font_version": "Report Sans SC Regular 1.0 (derived Noto Sans SC 2.004, static wght=400, OFL-1.1)",
+  "renderer_version": "external non-built-in CPython 3.12.14 / ReportLab 4.4.9 / Pillow 12.3.0 / pypdfium2 5.13.0",
+  "font_source": "https://github.com/google/fonts/tree/main/ofl/notosanssc",
+  "bundle_source": "Codex workspace runtime 26.909.12148; redistributed licenses inside bundle",
+  "files": {
+    "NotoSansSC.ttf": "cfb688480901ea661a39be5da276c788356e703b3dbd8d47c38cac84feb3ed5f",
+    "OFL.txt": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
+    "renderer-win-x64.zip": "472dc1b9b342ae23306a64ffa85666d4618f79ac6dd4cc523b56a1d6f7df4bd8",
+    "template.json": "51b77f99cfecdafae61bf24fccb8937db5cd5099edd389f30b3dd1f3918e465f"
+  },
+  "renderer_sources": {
+    "report_render.py": "422604017e95ffce9ce8edc38a31f684e972e592ce632bb77136f7fc47290433",
+    "report_layout.py": "52f5e352f121143e123eec7f27ed22b525299f6cf6943c101506f332df0f246f",
+    "report_docx.py": "70fdc64789239948930b5e9a0f0e27011db3ce6fb27792d5d19eee1b11789877",
+    "report_images.py": "db8f4aa32d55b40762031c74f5e2e22488c3e134ffc2f149395837e65ca7659c",
+    "report_source.py": "3259d0ba159f26f77246afc140451e0642f58b600584404c3d6284cbeca20533"
+  }
+}
