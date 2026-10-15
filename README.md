@@ -16,7 +16,9 @@ Copy-Item config/settings.example.json config/settings.json
 
 编辑本地 `config/settings.json`，选择自己的供应商、模型和参数。通过配置中的 `api_key_env` 对应的环境变量提供自己的 API Key；可在本机自行创建 `.env`，该文件被忽略且不随发布包提供。不要把密钥写进配置或提交到 Git。启动命令：`.\vastar.cmd`，续聊：`.\vastar.cmd --continue`。
 
-默认示例保留 DeepSeek 主供应商及配置中的备用供应商；首次模型请求需要相应凭据。`--help` 和 `--show-paths` 不调用模型。使用者须自行核对所用供应商的模型可用性、配额和费用。
+默认示例使用 DeepSeek 主供应商和 GLM 备用供应商，**启动时就需要 `DEEPSEEK_API_KEY` 与 `GLM_API_KEY`**。如果只使用 DeepSeek，把本地 `config/settings.json` 中的 `llm.fallback_provider` 改为 `null`，只配置 `DEEPSEEK_API_KEY` 即可。可在仓库根目录自行创建 `.env`，每行按 `变量名=自己的密钥` 填写。MiMo 仅在切换到该供应商时需要配置。`--help` 和 `--show-paths` 不调用模型。使用者须自行核对所用供应商的模型可用性、配额和费用。
+
+请在真正的 Windows 终端中交互运行；不要通过重定向标准输入/输出或管道启动交互界面，否则可能出现 `NoConsoleScreenBufferError`。
 
 ## 发布范围
 
