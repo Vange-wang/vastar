@@ -46,6 +46,7 @@ from memory.writer import StoreWriter  # noqa: E402
 from ui.renderer import Renderer, enable_windows_vt  # noqa: E402
 from ui.repl import ReplUI  # noqa: E402
 from ui.startup_screen import start_startup, stop_startup  # noqa: E402
+from ui.welcome import welcome_text  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -65,7 +66,9 @@ def build_app(args: argparse.Namespace):
     store = Store(launch.db_path,
                   require_existing=launch.paths.schema_version == 2 or args.continue_session)
     try:
-        return _assemble_app(args, launch, store)
+        app = _assemble_app(args, launch, store)
+        app["config_path"] = str(launch.config_path)
+        return app
     except BaseException:
         store.close()
         raise
@@ -91,15 +94,15 @@ def _assemble_app(args, launch, store):
 
     writer = StoreWriter(store)
     # R11：唯一入口 = vastar（inline 主路径）；全屏/输入框实验代码已整体删除
-    
-    
+
+
     renderer = Renderer(
         show_reasoning=bool(
             raw["llm"]["providers"][primary.name].get("show_reasoning", True)),
-        
+
         thinking_visible_lines=int(raw.get("ui", {}).get("thinking_visible_lines", 5)))
     tools_context, skills_context, artifacts = _assemble_tools(raw, paths, store)
-    
+
     cont_cfg = raw["llm"].get("continuation", {})
     continuation = ContinuationRunner(
         enabled=bool(cont_cfg.get("enabled", True)),
@@ -109,7 +112,7 @@ def _assemble_app(args, launch, store):
                            env_facts=format_env_facts(raw.get("env")) + "\n" + paths.prompt_facts(),
                            continuation=continuation,
                            skills=skills_context)
-    
+
     model_catalog = [
         (name, model)
         for name, block in raw["llm"]["providers"].items()
@@ -131,7 +134,7 @@ def _assemble_app(args, launch, store):
         "coordinator": coordinator, "renderer": renderer, "store": store, "writer": writer,
         "agent_def": agent_def, "primary": primary, "fallback": fallback,
         "recovered_count": marked, "raw": raw,
-        "tools": tools_context,   
+        "tools": tools_context,
         "skills": skills_context,   # B11：技能上下文（/status 与测试同口径的公开键）
         "artifacts": artifacts,       # B16：产物库（测试与排障的公开键）
         "paths": paths,
@@ -203,12 +206,6 @@ def _setup_logging(log_dir: Path) -> None:
     root.setLevel(logging.INFO)
 
 
-def _welcome_line(coordinator) -> str:
-    """Vastar runtime component."""
-    return (f"Vastar 就绪 · 模型 {coordinator.primary_label()}"
-            f" · 输出上限 {coordinator.output_limit_label()} · /help 查看命令")
-
-
 async def _run_ui(app: dict, *, continue_session: bool) -> None:
     try:
         await _serve_ui(app, continue_session=continue_session)
@@ -239,19 +236,20 @@ async def _serve_ui(app: dict, *, continue_session: bool) -> None:
             renderer.render_note(f"已续聊会话 {latest}（{history_count} 条历史消息）")
         else:
             renderer.render_note("没有可续聊的历史会话，已新建会话")
-    
-    # 降级可见性不丢失：结束时显式提示备用模型（Renderer._render_run_ended）。
-    renderer.render_note(_welcome_line(coordinator))
+
+    renderer.render_welcome(welcome_text())
     sandbox = getattr(app["tools"], "execution_sandbox", None)
-    if sandbox is not None:
-        renderer.render_note(sandbox.preflight_text())
+    startup_facts = sandbox.preflight_text() if sandbox is not None else ""
     if app["recovered_count"]:
         renderer.render_note(
             f"崩溃恢复：{app['recovered_count']} 个未结束 Run 已标记 INTERRUPTED（不自动重跑）")
     ui = ReplUI(coordinator=coordinator, renderer=renderer,
                 tool_registry=app["tools"].registry,
                 ask_gate=app["tools"].ask_gate,
-                permission_mode=app["tools"].permission_mode)
+                permission_mode=app["tools"].permission_mode,
+                user_name=app["raw"].get("ui", {}).get("user_name"),
+                config_path=app.get("config_path"),
+                startup_facts=startup_facts)
     coord_task = asyncio.create_task(coordinator.run_forever())
     try:
         await ui.run()

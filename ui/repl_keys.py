@@ -4,7 +4,7 @@ import time
 
 from prompt_toolkit.key_binding import KeyBindings
 
-_CTRL_C_FORCE_QUIT_WINDOW_S = 2.0   
+_CTRL_C_FORCE_QUIT_WINDOW_S = 2.0
 
 
 class ReplKeys:
@@ -24,7 +24,7 @@ class ReplKeys:
         def _newline(event):  # noqa: ANN001
             event.current_buffer.insert_text("\n")
 
-        
+
         @kb.add("c-c")
         def _ctrl_c(event):  # noqa: ANN001
             self._on_ctrl_c(bool(event.current_buffer.text), event)
@@ -39,6 +39,9 @@ class ReplKeys:
 
     def _on_ctrl_c(self, has_draft: bool, event=None) -> None:
         """Vastar runtime component."""
+        from ui.session_commands import cancel_replay
+        if cancel_replay(self):
+            return
         now = time.monotonic()
         was_mode = self._model_mode
         if not was_mode and (now - self._last_ctrl_c) <= _CTRL_C_FORCE_QUIT_WINDOW_S:
@@ -51,7 +54,7 @@ class ReplKeys:
         elif action == "cancel_ask":
             self._renderer.render_note("已拒绝本次工具确认（Ctrl+C）；当前回答继续")
         elif action == "cancel_run":
-            
+
             # SIGINT），本分支是生成中取消的**唯一生效路径**——此前只提示不取消，
             # “已请求取消当前回答…”成了假提示（实机 FAIL 根因）。
             self._coordinator.request_cancel()

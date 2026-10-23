@@ -28,7 +28,7 @@ class ReplCommands:
             await coord.new_session()
             self._renderer.render_note("已新建会话（旧会话已落库，可用 --continue 续聊）")
         elif cmd == "/model":
-            
+
             # 无参按固定顺序列出 "N) provider/model" 并标注当前；带参支持序号 /
             # 裸 model-id / provider/model 三种写法（序号制为主，名字向后兼容）。
             if not arg:
@@ -49,7 +49,8 @@ class ReplCommands:
                 self._renderer.render_note(f"当前插话模式 = {coord.mode}；用法 /mode [queue|interrupt]")
         elif cmd == "/status":
             self._renderer.render_note("\n".join(_status_lines(
-                coord, self._tool_registry, self._permission_mode)))
+                coord, self._tool_registry, self._permission_mode,
+                startup_facts=getattr(self, "_startup_facts", ""))))
         elif cmd == "/retry":
             if coord.is_busy():
                 self._renderer.render_note("正在回答中；先 Ctrl+C 取消再 /retry")
@@ -65,10 +66,10 @@ class ReplCommands:
             if message:
                 self._renderer.render_note(message)
         elif cmd == "/continue":
-            
+
             _handle_continue(self._renderer, coord)
         elif cmd == "/compact":
-            
+
             # 忙时拒绝（/new 同口径）；摘要为本地确定性拼装（零模型请求）。
             _handle_compact(self._renderer, coord, arg)
         elif cmd == "/skill":
@@ -79,7 +80,10 @@ class ReplCommands:
 
 
 async def _handle_extension(ui, cmd, arg):
-    if cmd == '/steer':
+    if cmd in ('/sessions', '/resume'):
+        from ui.session_commands import handle_sessions
+        await handle_sessions(ui, cmd, arg)
+    elif cmd == '/steer':
         from ui.steering_commands import handle_steer
         await handle_steer(ui, arg)
     elif cmd == '/history':

@@ -14,7 +14,8 @@ def _last_finish_note(last) -> str:
     return last.finish_reason
 
 
-def _status_lines(coord, registry, permission_mode: str | None) -> list[str]:
+def _status_lines(coord, registry, permission_mode: str | None, *,
+                  startup_facts: str = "") -> list[str]:
     """Vastar runtime component."""
     last = coord.last_result
     lines = [
@@ -41,6 +42,11 @@ def _status_lines(coord, registry, permission_mode: str | None) -> list[str]:
     for section in (_section_task, _section_usage, _section_memory, _section_compact,
                     _section_artifacts, _section_processes, _section_next_step):
         lines.extend(section(coord))
+    if startup_facts:
+        lines.append("启动预检（启动页不再显示，信息保留在此）：")
+        lines.extend(f"  {line}" for line in startup_facts.splitlines())
+    from ui.renderer import active_output_class  # 延迟导入：避免与 renderer 循环
+    lines.append(f"输出实现：{active_output_class()}")
     return lines
 
 
@@ -89,8 +95,8 @@ def _section_task(coord) -> list[str]:
         lines.append("动作：" + " · ".join(f"{label.get(k, k)} {v}" for k, v in sorted(counts.items())))
     snap = _task_snapshot_row(store, task["task_id"])
     if snap and snap.get("recovery_error"):
-        
-        
+
+
         if store.checkpoint_latest(task["task_id"]) is None:
             lines.append(f"恢复异常：{snap['recovery_error']}（无检查点，不可恢复；"
                          "/new 开新会话）")
@@ -185,12 +191,12 @@ def _section_next_step(coord) -> list[str]:
     hints = []
     last = coord.last_result
     if last is not None:
-        
+
         # needs_input 等 partial=False 的未完成态下 /continue 必败，不混入提示。
         if last.status == "incomplete" and getattr(last, "partial", False):
             hints.append("/continue 续写")
         elif last.status == "failed":
-            
+
             run_id = getattr(last, "run_id", None)
             hints.append(f"/retry 重问 · /trace run {run_id} 定位失败" if run_id
                          else "/retry 重问")
@@ -204,7 +210,7 @@ def _section_next_step(coord) -> list[str]:
         if task:
             snap = _task_snapshot_row(store, task["task_id"])
             if snap and snap.get("recovery_error"):
-                
+
                 if store.checkpoint_latest(task["task_id"]) is None:
                     hints.append("现场无检查点、不可恢复：/new 开新会话"
                                  "（任务留在原会话，可 /task attach 回挂）")

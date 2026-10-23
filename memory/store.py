@@ -28,6 +28,7 @@ from memory.repositories.facts import FactRepository
 from memory.repositories.history import HistoryRepository
 from memory.repositories.operations import OperationRepository
 from memory.repositories.runs import RunRepository
+from memory.repositories.sessions import SessionRepository
 from memory.repositories.tasks import TaskRepository
 
 __all__ = ["Store", "MEMORY_REVISIONS_DDL", "SCHEMA_VERSION"]
@@ -37,7 +38,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-class Store(EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
+class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
             OperationRepository, CheckpointRepository, HistoryRepository, FactRepository):
     """同步 SQLite 门面（写入经锁串行；读取可直接调）。"""
 
@@ -51,10 +52,10 @@ class Store(EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
         self._now = now or _now
         if not require_existing:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # 备份/收尾路径存在同线程再入）。必要性：WAL 只保证存储层并发，不防单连接上
         # 读写游标交错的 'recursive use of cursors'/'database error' 类错乱；
-        
+
         self._lock = threading.RLock()
         self._owner = Ownership(self._path).acquire()
         try:
@@ -94,7 +95,7 @@ class Store(EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
             )
 
     def latest_session(self) -> str | None:
-        with self._lock:   
+        with self._lock:
             row = self._conn.execute(
                 "SELECT session_id FROM sessions ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
@@ -152,7 +153,7 @@ class Store(EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
                 (snapshot_id, run_id, json.dumps(record, ensure_ascii=False), self._now()),
             )
 
-    
+
 
     def save_compact_snapshot(self, snapshot_id: str, session_id: str, record: dict) -> None:
         """压缩快照落库（kind=compact_summary；生命周期字段在 record 内：pending /
@@ -166,7 +167,7 @@ class Store(EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
             )
 
     def compact_snapshot_rows(self, session_id: str) -> list[dict]:
-        with self._lock:   
+        with self._lock:
             rows = self._conn.execute(
                 "SELECT snapshot_id, record_json FROM context_snapshots"
                 " WHERE run_id='' ORDER BY rowid DESC").fetchall()
@@ -181,7 +182,7 @@ class Store(EventStoreMixin, RunRepository, ArtifactRepository, TaskRepository,
     def latest_compact_snapshot(self, session_id: str,
                                  *, status: str | None = None) -> dict | None:
         """最新一条压缩快照（可按 status 过滤；无则 None）。"""
-        with self._lock:   
+        with self._lock:
             for row in self.compact_snapshot_rows(session_id):
                 if status is None or row.get("status") == status:
                     return row

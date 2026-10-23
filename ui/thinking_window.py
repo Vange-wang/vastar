@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-HEADER = "▏思考中~~~"
-SEPARATOR = "-" * 18   
+from ui.theme import SPINNER_FRAMES
+
 ELLIPSIS = "…"
 
 
@@ -36,25 +36,27 @@ def wrap_visible_lines(text: str, width: int) -> list[str]:
 
 
 class ThinkingWindow:
-    """滚动窗口构成器：全文 → 屏幕块（行列表，高 ≤ visible_lines + 3）。"""
+    """滚动窗口构成器：全文 → 屏幕块（行列表，高 ≤ visible_lines + 4）。"""
 
     def __init__(self, visible_lines: int = 5) -> None:
         self._n = max(1, visible_lines)
 
     @property
     def max_block_lines(self) -> int:
-        """块高硬上界：状态头 + 分隔线 + 省略行 + N 内容行（默认 8）。"""
-        return self._n + 3
+        """块高硬上界：顶线 + 状态头 + 省略行 + N 内容行 + 底线（默认 9）。"""
+        return self._n + 4
 
-    def compose(self, full_text: str, width: int) -> list[str]:
-        """构成当前应显示的块：窗口内恒为**最近** N 行（行序语义：新行入、顶行出）。"""
+    def compose(self, full_text: str, width: int, *, frame: int = 0) -> list[str]:
+        """构成当前应显示的块：窗口内恒为**最近** N 行；状态头符号按 frame 转动。"""
+        width = max(4, width)
         lines = wrap_visible_lines(full_text, width)
-        block = [HEADER, SEPARATOR]
-        if not lines:
-            return block
-        if len(lines) > self._n:
-            block.append(ELLIPSIS)
-        block.extend(lines[-self._n:])
+        spinner = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
+        block = ["─" * width, f"{spinner} Thinking......"]
+        if lines:
+            if len(lines) > self._n:
+                block.append(ELLIPSIS)
+            block.extend(lines[-self._n:])
+        block.append("─" * width)
         return block
 
     @staticmethod

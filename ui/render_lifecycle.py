@@ -11,8 +11,7 @@ class RenderLifecycle:
         self._last_provider = provider
         self._close_open_channel()
         if p.get("kind") == "continuation":
-            
-            self._in_continuation = True
+
             limit = (p.get("request_params") or {}).get("max_tokens", "?")
             self._emit("style.warning",
                        f"⚠ 已达单次输出上限（max_tokens={limit}），"
@@ -25,7 +24,7 @@ class RenderLifecycle:
             self._emit("style.warning",
                        f"[重试 第{index}次] {provider} · {p.get('model')}\n", flush=True)
         else:
-            self._emit("style.status",
+            self._emit("style.process",
                        f"[{provider} · {p.get('model')}] 请求中…\n", flush=True)
 
     def _render_run_ended(self, event) -> None:
@@ -40,6 +39,8 @@ class RenderLifecycle:
         usage = p.get("usage_totals") or {}
         latencies = p.get("latencies") or {}
         total_ms = latencies.get("submit_to_terminal_result", 0) / 1_000_000
+        self.last_run_seconds = total_ms / 1000   # §6④ 时间栏 `√` 后的上轮耗时
+        self._ui_dirty = True                     # 状态行转入完成态，请求重绘
         degraded = p.get("degraded", False)
         if status == "completed":
             head = self._styled("style.status", "[回答完成；任务待验收]"
@@ -47,13 +48,13 @@ class RenderLifecycle:
         elif status == "cancelled":
             head = self._styled("style.warning", "[已取消]")
         elif status == "incomplete":
-            
+
             head = self._styled("style.warning", _incomplete_text(p))
         else:
             head = self._styled("style.error", f"[失败] {p.get('finish_reason', '')}")
         suffix = ""
         if degraded:
-            
+
             fallback_label = p.get("degraded_to") or "备用模型"
             suffix = f" · 已降级 → 备用 {fallback_label}"
         explanation = run_usage(usage, p.get('call_records') or [], p.get('model_calls', 0))

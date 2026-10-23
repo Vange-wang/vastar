@@ -40,9 +40,15 @@ class RenderThinking:
 
     def _rv_repaint(self) -> None:
         """Vastar runtime component."""
+        from ui.renderer import _terminal_width  # 延迟导入：renderer 反向继承本 mixin
+        from ui.theme import SPINNER_FRAMES
+
+        self._rv_width = _terminal_width()
         erase = ThinkingWindow.erase_sequence(
             self._rv_block_lines, cursor_below_block=self._at_line_start)
-        block = self._thinking_window.compose(self._rv_text, self._rv_width)
+        block = self._thinking_window.compose(self._rv_text, self._rv_width,
+                                              frame=self._rv_frame)
+        self._rv_frame = (self._rv_frame + 1) % len(SPINNER_FRAMES)
         self._emit("style.reasoning", erase + "\n".join(block) + "\n", flush=True)
         self._rv_block_lines = len(block)
         self._rv_dirty = False

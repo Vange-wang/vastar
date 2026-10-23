@@ -3,40 +3,43 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 
 from core.errors import VastarError
 from core.events import EventType
+from ui.mood import MoodParser, MoodState
 from ui.render_lifecycle import RenderLifecycle
 from ui.render_thinking import RenderThinking
+from ui.theme import (
+    BRIGHT_BLUE,
+    BRIGHT_YELLOW,
+    DEFAULT_TERMINAL_WIDTH,
+    DIM_BLUE,
+    DIM_CONTENT,
+    DIM_PROCESS,
+    DIM_STATUS,
+    ERROR,
+    WARNING,
+    box_rules,
+    process_symbol,
+    terminal_width,
+)
 from ui.thinking_window import ThinkingWindow
 
 _RESET = "\x1b[0m"
 _PLAIN = "style.content"
-DEFAULT_TERMINAL_WIDTH = 80   
-MIN_TERMINAL_WIDTH = 20       
+_RAW = "style.raw"               # 已着色文本（欢迎块/消息框线）：不再叠加样式
+_terminal_width = terminal_width   # 兼容旧导入（render_thinking / 既有用例）
 
 STYLE_KEYS = {
-    "style.reasoning": "\x1b[2m\x1b[38;5;110m",   # 弱化浅蓝：思考区
-    "style.content": "",                           # 正文默认色
-    "style.status": "\x1b[38;5;75m",               # 蓝：状态
-    "style.warning": "\x1b[38;5;214m",             # 橙：警告
-    "style.error": "\x1b[38;5;203m",               # 红：错误
-    "style.accent": "\x1b[1m\x1b[38;5;117m",       # 亮蓝粗体：强调
+    "style.reasoning": DIM_BLUE,       # 弱化浅蓝：思考区
+    "style.content": DIM_CONTENT,
+    "style.status": DIM_STATUS,
+    "style.process": DIM_PROCESS,      # 降亮蓝：中间过程（§10）
+    "style.warning": WARNING,          # 橙黄：警告
+    "style.error": ERROR,              # 红：错误
+    "style.accent": BRIGHT_BLUE,       # 亮蓝粗体：强调
 }
-
-_REASONING_TAG = "▏思考 "
-
-_CONTENT_TAG = "▏回答 "
-
-
-def _terminal_width() -> int:
-    """当前终端宽度（下限钳制；无终端环境回退 DEFAULT_TERMINAL_WIDTH）。"""
-    try:
-        return max(MIN_TERMINAL_WIDTH, shutil.get_terminal_size().columns)
-    except Exception:  # noqa: BLE001 - 无终端环境
-        return DEFAULT_TERMINAL_WIDTH
 
 
 def enable_windows_vt() -> None:
@@ -58,7 +61,7 @@ def active_output_class() -> str:
 def _incomplete_text(p: dict) -> str:
     """run.ended 的 incomplete 可行动提示（撞顶给上限值与 /continue；超时给时长口径）。"""
     reason = str(p.get("finish_reason", ""))
-    
+
     # 提示不再单轨承诺 /continue，同时给 /task status 入口（run.ended 经 annotate 带 task_id）。
     cont_hint = ("输入 /continue 可继续" if not p.get("task_id")
                  else "可输入 /continue 续写，或 /task status 查看任务动作")
@@ -94,12 +97,18 @@ class Renderer(RenderLifecycle, RenderThinking):
         # patch_stdout 在 REPL 启动后才替换 sys.stdout，缓存会绕过代理直写控制台）
         self._out = out
         self._show_reasoning = show_reasoning
-        
+
+        # 块高恒 ≤N+4（擦除有界、折叠必成不变）。
         self._thinking_window = ThinkingWindow(thinking_visible_lines)
         self._open_channel: str | None = None
+
+        # 不注入换行也不保存会随滚屏失效的绝对行；dirty 防止重复擦画提示框。
+        self._content_prompt_below = False
+        self._content_dirty = False
+        self._content_col = 0
         self._last_provider: str | None = None
         # R2 思考状态：_rv_text = 思考全文（/think + 窗口数据源，不受限高影响）；
-        # _rv_block_lines/_rv_dirty 驱动窗口重绘与折叠擦除（口径=实际块高，恒 ≤8）。
+        # _rv_block_lines/_rv_dirty 驱动窗口重绘与折叠擦除（口径=实际块高）。
         # _rv_lines/_rv_col 仅供 /think toggle 展开时统计全文打印行数（_rv_feed）。
         self._rv_lines = 0
         self._rv_col = 0
@@ -107,6 +116,7 @@ class Renderer(RenderLifecycle, RenderThinking):
         self._rv_text = ""
         self._rv_block_lines = 0
         self._rv_dirty = False
+        self._rv_frame = 0               # §9 思考行转动帧（一／|／/／\ 循环）
         self._last_reasoning: str | None = None
         # R2 v1.1：/think toggle 状态
         self._think_expanded = False
@@ -115,8 +125,11 @@ class Renderer(RenderLifecycle, RenderThinking):
         self._think_writes_since_expand = 0
         # R9（P0-6）：光标是否处于行首——提示行只在行边界重绘（帧级不动）
         self._at_line_start = True
-        
-        self._in_continuation = False
+
+        self._mood_parsers = {"content": MoodParser(), "reasoning": MoodParser()}
+        self.mood = MoodState()
+        self._ui_dirty = False           # 状态行需重绘（Run 结束/心情更新）
+        self.last_run_seconds: float | None = None   # 时间栏 `√` 后的上轮耗时
 
     # ---- 基础输出 ----------------------------------------------------------------
 
@@ -136,15 +149,30 @@ class Renderer(RenderLifecycle, RenderThinking):
         self._raw_write(self._styled(style_key, text), flush=flush)
 
     def _raw_write(self, text: str, *, flush: bool = False) -> None:
+        """Vastar runtime component."""
         out = self._stream
-        out.write(text)
+        normalized = text.replace("\r\n", "\n").replace("\n", "\r\n")
+        if hasattr(out, "encoding") and hasattr(out, "buffer"):
+            out.buffer.write(normalized.encode(out.encoding or "utf-8", "replace"))
+        else:
+            out.write(normalized)
         if flush:
             out.flush()
 
     def flush_line_boundary(self) -> None:
         """Vastar runtime component."""
-        if self._open_channel == "reasoning" and self._rv_dirty:
+        if self._open_channel == "reasoning":
             self._rv_repaint()
+            return
+        if self._open_channel == "content":
+            if not self._content_dirty:
+                return
+            self._content_dirty = False
+            if self._at_line_start:
+                return
+
+            self._raw_write("\x1bE", flush=True)
+            self._content_prompt_below = True
             return
         if not self._at_line_start:
             self._emit(_PLAIN, "\n", flush=True)
@@ -154,10 +182,35 @@ class Renderer(RenderLifecycle, RenderThinking):
         return f"{style}{text}{_RESET}" if style else text
 
     def _close_open_channel(self) -> None:
-        if self._open_channel == "reasoning":
-            self._collapse_reasoning()
-        elif self._open_channel is not None:
-            self._emit(_PLAIN, "\n", flush=True)
+        channel = self._open_channel
+        if channel is not None:
+            # 心情残片不静默丢字：思考并入全文（/think 可见），正文原样落屏。
+            pending = self._mood_parsers[channel].flush_pending()
+            if channel == "reasoning":
+                self._rv_text += pending
+                self._collapse_reasoning()
+            elif channel == "content":
+                _, bottom = box_rules("Vastar", BRIGHT_YELLOW)
+                if pending and not pending.endswith("\n"):
+                    pending += "\n"
+                # 底线必须独占一行：提示在正文下时，未满列相对回正文末；
+
+                prefix = ""
+                wrapped_prompt_line = False
+                if self._content_prompt_below:
+                    wrapped_prompt_line = self._content_col == _terminal_width()
+                    if not wrapped_prompt_line:
+                        prefix = f"\x1b[1A\x1b[{self._content_col + 1}G"
+                self._content_prompt_below = False
+                self._content_dirty = False
+                if not self._at_line_start and not wrapped_prompt_line:
+                    # 满列时终端处于 delayed-wrap；先离开该状态，避免底线覆盖末字。
+                    prefix += ("\x1bE" if self._content_col == _terminal_width()
+                               else "\n")
+                self._content_col = 0
+                self._emit(_RAW, prefix + pending + bottom + "\n", flush=True)
+            else:
+                self._emit(_PLAIN, pending + "\n", flush=True)
         self._open_channel = None
 
     # ---- 事件渲染 -----------------------------------------------------------------
@@ -166,10 +219,10 @@ class Renderer(RenderLifecycle, RenderThinking):
         t = event.type
         if t == EventType.REASONING_DELTA:
             self._stream_delta("reasoning", str(event.payload.get("text", "")),
-                               _REASONING_TAG, "style.reasoning")
+                               "style.reasoning")
         elif t == EventType.CONTENT_DELTA:
             self._stream_delta("content", str(event.payload.get("text", "")),
-                               _CONTENT_TAG, "style.content")
+                               "style.content")
         elif t == EventType.ERROR:
             self._close_open_channel()
             payload = event.payload
@@ -194,7 +247,10 @@ class Renderer(RenderLifecycle, RenderThinking):
             _render_skill_event(self, event)   # B11：替换/拒绝必须用户可见（D4）
         # run.state_changed / usage.reported / context.compacted：不逐条刷屏（提示不冗余）
 
-    def _stream_delta(self, channel: str, text: str, tag: str, style_key: str) -> None:
+    def _stream_delta(self, channel: str, text: str, style_key: str) -> None:
+
+        text, moods = self._mood_parsers[channel].feed(text)
+        self.mood.update(moods)
         if not text:
             return
         if not self._show_reasoning and channel == "reasoning":
@@ -202,25 +258,66 @@ class Renderer(RenderLifecycle, RenderThinking):
         if self._open_channel != channel:
             self._close_open_channel()
             if channel == "reasoning":
-                
+
                 # 窗口块由边界计时器合批重绘（≤0.2s 可见，R2 实时性不破）。
                 self._rv_width = _terminal_width()
                 self._rv_text = ""
                 self._rv_block_lines = 0
                 self._rv_dirty = False
-            elif self._in_continuation:
-                
-                self._in_continuation = False
             else:
-                self._emit(style_key, tag)      # 部分行缓冲；边界计时器成批落屏（R9）
+
+                self._content_col = 0
+                top, _ = box_rules("Vastar", BRIGHT_YELLOW)
+                self._emit(_RAW, top + "\n")    # 部分行缓冲；边界计时器成批落屏（R9）
             self._open_channel = channel
         if channel == "reasoning":
             self._rv_text += text
             self._rv_dirty = True               # 落屏合批点：flush_line_boundary
         else:
-            self._emit(style_key, text)         # 同上：批尾换行 → 提示行独占下一行
+            from prompt_toolkit.utils import get_cwidth
+
+
+            # 回正文末尾，滚屏后不依赖 DECRC 的过期绝对行；本拍仍不伪造换行。
+            width = _terminal_width()
+            if self._content_prompt_below:
+                if self._content_col == width:
+                    # 满列后的提示行就是自然折行后的新行，无需再移动。
+                    self._content_col = 0
+                else:
+                    self._raw_write(f"\x1b[1A\x1b[{self._content_col + 1}G")
+                self._content_prompt_below = False
+            elif self._content_col == width:
+                # 满列时终端处于 delayed-wrap；先落到下一行，防止首字覆盖末字。
+                self._raw_write("\x1bE")
+                self._content_col = 0
+            self._emit(style_key, text)
+            for ch in text:
+                if ch == "\n":
+                    self._content_col = 0
+                    continue
+                w = max(0, get_cwidth(ch))
+                if w == 2 and self._content_col == width - 1:
+                    # ConPTY 允许宽字符占末列；随后按满列 delayed-wrap 处理。
+                    self._content_col = width
+                elif self._content_col + w > width:
+                    self._content_col = w
+                else:
+                    self._content_col += w
+            self._content_dirty = True
 
     # ---- 协调器直接通知 --------------------------------------------------------------
+
+    @property
+    def thinking_enabled(self) -> bool:
+        """状态行「思考程度」只读口径（生效态）。"""
+        return self._show_reasoning
+
+    def consume_ui_dirty(self) -> bool:
+        """状态行重绘请求（Run 结束/心情更新）；读取即清。"""
+        dirty = self._ui_dirty or self.mood.dirty
+        self._ui_dirty = False
+        self.mood.consume_dirty()
+        return dirty
 
     def render_error(self, err: VastarError) -> None:
         self._close_open_channel()
@@ -229,6 +326,22 @@ class Renderer(RenderLifecycle, RenderThinking):
     def render_note(self, text: str) -> None:
         self._close_open_channel()
         self._emit("style.status", f"{text}\n", flush=True)
+
+    def render_welcome(self, text: str) -> None:
+        """欢迎块（§1/§2）：已着色的多行文本原样落屏，不再叠加样式。"""
+        self._close_open_channel()
+        self._emit(_RAW, text, flush=True)
+
+    def render_user_message(self, name: str, text: str) -> None:
+        """Vastar runtime component."""
+        self._close_open_channel()
+        top, bottom = box_rules(name, BRIGHT_BLUE)
+        body = str(text)
+        if not body.endswith("\n"):
+            body += "\n"
+        self._emit(_RAW, f"{top}\n")
+        self._emit(_PLAIN, body)
+        self._emit(_RAW, f"{bottom}\n", flush=True)
 
 
 def _render_tool_event(renderer: Renderer, event) -> None:
@@ -248,22 +361,22 @@ def _render_tool_event(renderer: Renderer, event) -> None:
             renderer._emit("style.warning", str(line) + "\n")
         return
     lines = {
-        "tool.requested": f"▏调用 {name} …（{payload.get('args_summary', '')}）",
-        "tool.executed": (f"▏{name} 完成（{payload.get('duration_ms', 0)}ms"
+        "tool.requested": f"{process_symbol(name)} 调用 {name} …（{payload.get('args_summary', '')}）",
+        "tool.executed": (f"{process_symbol(name)} {name} 完成（{payload.get('duration_ms', 0)}ms"
                           + (f"，截断 {payload.get('truncated_bytes')} 字节"
                              if payload.get("truncated_bytes") else "") + "）"),
-        "tool.rejected": f"▏{name} 被拒绝：{payload.get('detail') or payload.get('reason', '')}",
-        "tool.failed": f"▏{name} 失败：{payload.get('reason', '')}",
-        "tool.cancelled": f"▏{name} 已取消",
+        "tool.rejected": f"⚙ {name} 被拒绝：{payload.get('detail') or payload.get('reason', '')}",
+        "tool.failed": f"⚙ {name} 失败：{payload.get('reason', '')}",
+        "tool.cancelled": f"⚙ {name} 已取消",
     }
     if kind == "tool.executed" and payload.get("active"):
-        lines[kind] = f"▏{name} 已提交，执行体仍在收尾核实中"
+        lines[kind] = f"⚙ {name} 已提交，执行体仍在收尾核实中"
     if kind == "tool.failed" and payload.get("operation_state") == "unknown":
-        lines[kind] = f"▏{name} 结果待核实：{payload.get('reason', '')}"
+        lines[kind] = f"⚙ {name} 结果待核实：{payload.get('reason', '')}"
     if kind == "tool.cancelled" and payload.get("operation_state") == "cancelled_before_commit":
-        lines[kind] = f"▏{name} 已在提交前取消（目标未提交新写入）"
+        lines[kind] = f"⚙ {name} 已在提交前取消（目标未提交新写入）"
     style = "style.error" if kind == "tool.failed" else \
-        ("style.warning" if kind in ("tool.rejected", "tool.cancelled") else "style.status")
+        ("style.warning" if kind in ("tool.rejected", "tool.cancelled") else "style.process")
     renderer._close_open_channel()
     renderer._emit(style, lines[kind] + "\n")
 
@@ -275,11 +388,11 @@ def _render_skill_event(renderer: Renderer, event) -> None:
     if event.type == EventType.SKILL_REJECTED:
         style, line = "style.warning", f"✋ 技能未加载：{p.get('detail', '')}"
     elif p.get("action") == "replaced":
-        style = "style.status"
+        style = "style.process"
         line = (f"⚡ 已加载技能「{p.get('skill')}」v{p.get('version')}"
                 f"（{label}触发；{p.get('detail', '')}）")
     else:
-        style = "style.status"
+        style = "style.process"
         line = f"⚡ 已加载技能「{p.get('skill')}」v{p.get('version')}（{label}触发）"
     renderer._close_open_channel()
     renderer._emit(style, line + "\n")

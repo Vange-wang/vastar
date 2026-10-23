@@ -17,6 +17,7 @@ from core.prompt import PromptBundle
 from core.runtime import ReActRuntime, RunRequest, RunResult
 from core.session_compact import CompactSessionMixin
 from core.session_lifecycle import RunLifecycleMixin
+from core.session_resume import SessionResumeMixin
 from core.skills.session_hook import SkillSessionMixin
 from memory.store import Store
 from memory.writer import Origin, StoreWriter
@@ -32,7 +33,7 @@ class PendingInput:
     retry_of_run_id: str | None = None
     run_id: str | None = None
     explicit_skill: str | None = None   # 提交时绑定，不能让此前排队输入消费后来的安排
-    continuation_of: str | None = None   
+    continuation_of: str | None = None
                                          # run_id；此时 text 为空、不落新用户消息）
     sequencer: EventSequencer = field(default_factory=EventSequencer)   # B03.01：一个 Run
                                          # 一个分配器——提交侧（input.accepted）与派发侧
@@ -49,7 +50,7 @@ class InputReceipt:
     note: str = ""
 
 
-class SessionCoordinator(RunLifecycleMixin, ModelSwitchMixin, CompactSessionMixin,
+class SessionCoordinator(SessionResumeMixin, RunLifecycleMixin, ModelSwitchMixin, CompactSessionMixin,
                          SkillSessionMixin):   # B11：/skill 显式通道（外挂 Mixin，D10）
     """会话协调器：一个会话最多一个活动 Run；事件单入口按序处理。"""
 
@@ -104,7 +105,7 @@ class SessionCoordinator(RunLifecycleMixin, ModelSwitchMixin, CompactSessionMixi
         self._stopped = False
         self._pause_after_interrupt = False
         self._cancel_pending = False
-        self._last_user_input: str | None = None   
+        self._last_user_input: str | None = None
 
     # ---- 生命周期 ---------------------------------------------------------------
 
