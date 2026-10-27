@@ -1,3 +1,5 @@
+![Vastar 星空封面](assets/Vastar-wallpaper.png)
+
 # Vastar
 
 本地优先的 Python 通用 Agent，包含工具调用、持久化会话与任务记录、可组合技能及多 Agent 协作。
