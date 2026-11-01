@@ -1,0 +1,20 @@
+name: vastar-search
+services:
+  search:
+    image: docker.io/searxng/searxng@sha256:f4aa660c54d062dedb268be84e821ea24e39f48c7a496af8dd02cc9eedb93847
+    restart: "no"
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set a local random SEARXNG_SECRET before starting}
+      SEARXNG_BASE_URL: http://127.0.0.1:8888/
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    # No host port: only the loopback gateway exposes the search API.
+  gateway:
+    image: docker.io/library/nginx@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
+    restart: "no"
+    depends_on:
+      - search
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

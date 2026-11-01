@@ -13,7 +13,8 @@ TYPES = ('text/html', 'text/plain', 'text/css', 'application/javascript', 'text/
 class ReadonlyPolicy:
     def __init__(self, policy, urls):
         self.policy = policy
-        self.urls = frozenset(policy.target(url)[0] for url in urls)
+        self.all_public = "*" in urls and policy.allow_public_hosts
+        self.urls = frozenset(policy.target(url)[0] for url in urls if url != "*")
         self.robots = frozenset(f'{urlsplit(u).scheme}://{urlsplit(u).netloc}/robots.txt' for u in self.urls)
 
     def __getattr__(self, name):
@@ -21,7 +22,7 @@ class ReadonlyPolicy:
 
     def target(self, url):
         result = self.policy.target(url)
-        if result[0] not in self.urls | self.robots:
+        if not self.all_public and result[0] not in self.urls | self.robots:
             raise NetworkError('navigation_not_authorized', 'URL lacks explicit read-only semantic authorization')
         return result
 
@@ -49,7 +50,7 @@ class BrowserBroker:
 
     def check(self, url):
         canonical = self.network.policy.target(url)[0]
-        if canonical not in self.network.policy.urls:
+        if not self.network.policy.all_public and canonical not in self.network.policy.urls:
             raise NetworkError('navigation_not_authorized', 'navigation URL has no readonly grant')
         if self.network.transport.live:
             self.network.policy.require_live_grant()

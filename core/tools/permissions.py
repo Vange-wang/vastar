@@ -9,7 +9,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 OPEN_LEVELS = ("A", "B", "C")   # R25：C = 写文件子项已开（操作判定见 decide_operation）
-_LEVEL_D_NOTE = ("权限级 D 未开启（执行代码/命令待 user 明确点名后按裁定开启；"
+_LEVEL_D_NOTE = ("权限级 D 未开启（执行代码/命令待 Vange 明确点名后按裁定开启；"
                  "C 的其余项——联网检索——同）")
 
 _MSYS_STYLE_RE = re.compile(r"^/[A-Za-z](/|$)")

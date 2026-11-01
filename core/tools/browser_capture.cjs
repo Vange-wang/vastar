@@ -2,7 +2,9 @@
 const crypto = require('crypto');
 const { targets, secrets, redact } = require('./browser_targets.cjs');
 
-const pixels = page => page.screenshot({ type: 'png', animations: 'disabled', timeout: 5000,
+// Editable regions are already masked. Hiding the caret also rewrites their styles,
+// which can change the DOM or repaint focused borders during our own version check.
+const pixels = page => page.screenshot({ type: 'png', caret: 'initial', animations: 'disabled', timeout: 5000,
   mask: page.frames().map(frame => frame.locator('input,textarea,[contenteditable],iframe[srcdoc]')) });
 
 async function version(page) {

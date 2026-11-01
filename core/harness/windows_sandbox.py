@@ -50,10 +50,9 @@ class ContainerProfile:
                 bind(C.WinDLL("ole32"), "CoTaskMemFree", None, [C.c_void_p])(folder)
 
     def install_runtime(self):
-        executable = shutil.which("pwsh")
-        if not executable:
-            raise OSError("PowerShell 7 required; no Windows PowerShell fallback")
-        shutil.copytree(Path(executable).resolve().parent, self.runtime)
+        from core.harness.shell_runtime import install_shell
+
+        install_shell(self.runtime)
 
     def close(self):
         # Delete only the OS profile created by this instance; no caller-supplied path.

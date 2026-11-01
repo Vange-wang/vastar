@@ -82,10 +82,10 @@ def publish(artifacts, payload, result):
         for item in meta:
             artifacts.delete(item.artifact_id, item.version)
         raise
-    (payload.staging / "STATUS.txt").write_text("机器检查通过；真人版式待 user\n", encoding="utf-8")
+    (payload.staging / "STATUS.txt").write_text("机器检查通过；真人版式待 Vange\n", encoding="utf-8")
     proof = {"structure": result["structure"], "visual": result["visual"], "versions": payload.versions,
              "hashes": hashes, "artifacts": {name: item.uri for name, item in zip(files, meta, strict=True)}}
     (payload.staging / "evidence.json").write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"status": "machine_verified", "human_layout": "pending user", "directory": str(payload.staging),
+    return {"status": "machine_verified", "human_layout": "pending Vange", "directory": str(payload.staging),
             "files": list(files), "artifact_refs": proof["artifacts"], "hashes": hashes,
             "versions": payload.versions, "note": "可打开及机器检查已完成；不代表真人版式合格。"}

@@ -1,7 +1,6 @@
 """Offline execution in disposable private roots; never silently fall back."""
 
 import os
-import shutil
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -29,9 +28,18 @@ class ExecutionSandbox:
         self._unresolved = False
 
     def preflight(self):
-        available = (os.name == "nt" and self.policy.mode == "appcontainer"
-                     and shutil.which("pwsh") is not None)
+        available = os.name == "nt" and self.policy.mode == "appcontainer"
+        shell_error = None
+        if available:
+            from core.harness.shell_runtime import select_shell
+
+            try:
+                select_shell()
+            except OSError as exc:
+                available, shell_error = False, str(exc)
         return {**self.policy.capabilities(), "available": available,
+                "shell_error": shell_error,
+                "shell_check": "path presence; executable validation before each runtime copy",
                 "execution_effective": available and self.policy.capabilities()["execution_effective"],
                 "isolation": "AppContainer 只读文件模式（每次执行前核实并封闭）"
                              if available else "非沙箱（拒绝执行）",

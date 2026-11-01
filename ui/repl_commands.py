@@ -28,25 +28,9 @@ class ReplCommands:
             await coord.new_session()
             self._renderer.render_note("已新建会话（旧会话已落库，可用 --continue 续聊）")
         elif cmd == "/model":
-
-            # 无参按固定顺序列出 "N) provider/model" 并标注当前；带参支持序号 /
-            # 裸 model-id / provider/model 三种写法（序号制为主，名字向后兼容）。
-            if not arg:
-                for index, provider, model, is_current in coord.model_catalog():
-                    mark = " ← 当前" if is_current else ""
-                    self._renderer.render_note(f"  {index}) {provider}/{model}{mark}")
-                self._renderer.render_note("请输入序号选择模型；Ctrl+C 回退")
-                self._model_mode = True   # R3：进入选择模式（模式吃输入，Ctrl+C 唯一回退）
-                return
-            _ok, message = coord.switch_model(arg)
-            self._renderer.render_note(message)
+            _handle_model(self, arg)
         elif cmd == "/mode":
-            if arg in ("queue", "interrupt"):
-                coord.set_mode(arg)
-                self._renderer.render_note(f"插话模式 = {arg}"
-                                           + ("（流式期间新输入将打断当前回答）" if arg == "interrupt" else ""))
-            else:
-                self._renderer.render_note(f"当前插话模式 = {coord.mode}；用法 /mode [queue|interrupt]")
+            _handle_mode(self, arg)
         elif cmd == "/status":
             self._renderer.render_note("\n".join(_status_lines(
                 coord, self._tool_registry, self._permission_mode,
@@ -77,6 +61,30 @@ class ReplCommands:
             _handle_skill(self._renderer, coord, arg)
         else:
             self._renderer.render_note(f"未知命令 {cmd}；可用：{' '.join(commands._COMMANDS)}")
+
+
+def _handle_mode(ui, arg):
+    if arg in ("queue", "interrupt"):
+        ui._coordinator.set_mode(arg)
+        ui._renderer.render_note(f"插话模式 = {arg}"
+                                   + ("（流式期间新输入将打断当前回答）" if arg == "interrupt" else ""))
+    else:
+        ui._renderer.render_note(f"当前插话模式 = {ui._coordinator.mode}；用法 /mode [queue|interrupt]")
+
+
+def _handle_model(ui, arg):
+
+    # 无参按固定顺序列出 "N) provider/model" 并标注当前；带参支持序号 /
+    # 裸 model-id / provider/model 三种写法（序号制为主，名字向后兼容）。
+    if not arg:
+        for index, provider, model, is_current in ui._coordinator.model_catalog():
+            mark = " ← 当前" if is_current else ""
+            ui._renderer.render_note(f"  {index}) {provider}/{model}{mark}")
+        ui._renderer.render_note("请输入序号选择模型；Ctrl+C 回退")
+        ui._model_mode = True   # R3：进入选择模式（模式吃输入，Ctrl+C 唯一回退）
+        return
+    _ok, message = ui._coordinator.switch_model(arg)
+    ui._renderer.render_note(message)
 
 
 async def _handle_extension(ui, cmd, arg):

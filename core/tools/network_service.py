@@ -9,7 +9,7 @@ from core.tools.network_transport import NativeHttpTransport, checkpoint
 
 class NetworkService:
     def __init__(self, policy, transport=None, credential=None, credential_host=None):
-        self.policy, self.transport, self.credential = policy, transport or NativeHttpTransport(), credential
+        self.policy, self.transport, self.credential = policy, transport or NativeHttpTransport(proxy_mode=policy.proxy_mode), credential
         self.credential_host = credential_host
 
     def fetch(self, url, cancel, *, types=("text/html", "text/plain"), usage=None):

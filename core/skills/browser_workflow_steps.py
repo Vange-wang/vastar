@@ -27,7 +27,8 @@ def validate_urls(context, definition):
     readonly = ReadonlyPolicy(policy, config.get('readonly_urls', []))
     urls = definition['urls'] if definition['mode'] == 'collect' else [definition['url']]
     for url in urls:
-        require(readonly.target(url)[0] in readonly.urls, 'navigation_not_authorized')
+        canonical = readonly.target(url)[0]
+        require(readonly.all_public or canonical in readonly.urls, 'navigation_not_authorized')
     for step in definition.get('steps', []):
         if step.get('request'):
             require(policy.target(step['request']['url'])[0] in config.get('write_urls', []),

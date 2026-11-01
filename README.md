@@ -135,14 +135,24 @@ DEEPSEEK_API_KEY=在这里填写自己的密钥
 
 | 能力 | 使用条件 |
 |---|---|
-| 浏览器操作 | 配置 Node.js、Playwright、Chromium 路径与访问范围；模板默认关闭浏览器入口 |
-| 联网检索 | 配置检索端点、凭据和允许访问的主机；模板默认关闭联网检索 |
+| 浏览器操作 | 模板已启用入口；需另行安装并配置 Node.js、Playwright、Chromium 路径与访问范围，缺少依赖会显示不可用 |
+| 联网检索 | 模板已启用公开网页访问；搜索使用本地 SearXNG，须先启动下方服务；也可手动配置 DuckDuckGo |
 | MCP 工具 | 在 `providers.servers` 中配置服务及其依赖；模板未预置服务 |
 | 文档与表格处理 | 取决于具体格式及所需解析依赖，可先查看相应能力状态 |
 | 报告导出 | 需要匹配资源清单的 Windows 渲染环境包；本仓库不附带该独立环境包 |
 | 多 Agent 协作 | 通过任务与团队模块配置和管理，受模型、预算及工具权限约束 |
 
 隔离执行中的网络权限由 `execution.network` 单独控制，模板值为 `false`。启用浏览器或检索入口不等于同时启用隔离进程联网。
+
+## 本地搜索服务
+
+搜索默认连接 `http://127.0.0.1:8888/search`。安装并启动 Docker Desktop 的 Linux engine 后，按 [SearXNG 部署说明](deploy/searxng/README.md) 生成本机会话密钥并启动服务。部署文件固定镜像版本，仅监听本机回环地址，默认不开机自启。
+
+服务未启动时，搜索会明确报错，不会自动切换到 DuckDuckGo。若希望使用 DuckDuckGo，将本地配置的 `network.search_provider` 改为 `duckduckgo`，`search_endpoint` 设为空字符串；遇到验证码仍会报错。公开网页读取不依赖本地搜索服务。
+
+模板使用系统代理访问公网；代理需要可信。本地 SearXNG 在通过网络策略检查后直接连接。浏览器路径留空供使用者配置，不携带开发机依赖。
+
+Windows 隔离执行需要 PowerShell 7。运行时会解析 Microsoft Store 的 `pwsh.exe` 应用别名并验证实际程序；也可通过 `VASTAR_PWSH_PATH` 指定 PowerShell 7 可执行文件。环境不满足时会明确报错。
 
 ## 文件与数据
 

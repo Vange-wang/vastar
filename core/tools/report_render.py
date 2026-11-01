@@ -46,7 +46,7 @@ def render(source, template):
             "docx": base64.b64encode(docx).decode(), "pages": pages,
             "structure": {"page_count": len(pages), "text": text, "metadata": metadata},
             "visual": {"engine": "PDFium actual PDF raster", "pages_checked": list(range(1, len(pages) + 1)),
-                       "edge_check": "passed", "human_layout": "pending user"}}
+                       "edge_check": "passed", "human_layout": "pending Vange"}}
 
 
 def main():

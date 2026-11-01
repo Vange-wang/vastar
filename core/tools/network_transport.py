@@ -1,11 +1,13 @@
-"""Direct sockets pinned to policy-validated DNS, TLS verifies original host; no env proxy."""
+"""Validated direct HTTP or explicitly selected trusted system proxy; TLS verifies host."""
 import concurrent.futures
 import http.client
+import ipaddress
 import socket
 import ssl
 import threading
 import time
 from urllib.parse import urlsplit
+from urllib.request import getproxies
 
 from core.harness.network_policy import NetworkError
 
@@ -39,7 +41,8 @@ class Response:
 class NativeHttpTransport:
     live = True
 
-    def __init__(self):
+    def __init__(self, proxy_mode="direct"):
+        self.proxy_mode = proxy_mode
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="vastar-dns")
         self.lock, self.pending = threading.Lock(), set()
         self.slots = threading.BoundedSemaphore(2)
@@ -75,11 +78,24 @@ class NativeHttpTransport:
         connection = http.client.HTTPConnection(parsed.hostname, port, timeout=checkpoint(cancel, deadline))
         stop = threading.Event()
         try:
-            sock = socket.create_connection((address, port), timeout=checkpoint(cancel, deadline))
+            proxy = getproxies().get(parsed.scheme) if self.proxy_mode == "system" else None
+            # A policy-approved literal loopback must reach this host, not the proxy host.
+            if parsed.hostname == address and ipaddress.ip_address(address).is_loopback:
+                proxy = None
+            endpoint = urlsplit(proxy) if proxy else None
+            if endpoint and (endpoint.scheme != "http" or endpoint.username or endpoint.password or not endpoint.hostname):
+                raise NetworkError("proxy_unsupported", "Only an HTTP proxy without embedded credentials is supported")
+            target = (endpoint.hostname, endpoint.port or 80) if endpoint else (address, port)
+            sock = socket.create_connection(target, timeout=checkpoint(cancel, deadline))
+            # System mode delegates final DNS routing to the explicitly trusted proxy.
+            if endpoint:
+                connection.set_tunnel(parsed.hostname, port)
             connection.sock = sock
             owned = {"socket": sock}
             watcher = threading.Thread(target=_interrupt, args=(owned, stop, cancel, deadline), daemon=True)
             watcher.start()
+            if endpoint:
+                connection._tunnel()
             if parsed.scheme == "https":
                 sock.settimeout(checkpoint(cancel, deadline))
                 connection.sock = ssl.create_default_context().wrap_socket(sock, server_hostname=parsed.hostname)

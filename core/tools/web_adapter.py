@@ -44,9 +44,11 @@ class SearxngWebAdapter:
 
     def __init__(self, endpoint):
         self.endpoint = endpoint.rstrip("/")
+        if not self.endpoint.endswith("/search"):
+            self.endpoint += "/search"
 
     def search_url(self, query, page):
-        return self.endpoint + "/search?" + urlencode({"q": query, "format": "json", "pageno": page})
+        return self.endpoint + "?" + urlencode({"q": query, "format": "json", "pageno": page})
 
     def search_results(self, body):
         try:

@@ -258,31 +258,42 @@
   "ui": {
     "thinking_visible_lines": 5
   },
-  "config_revision": "task76-v1",
+  "config_revision": "local-searxng-20261101-v1",
   "execution": {
     "enabled": true,
     "network": false,
     "mode": "appcontainer"
   },
   "network": {
-    "enabled": false,
-    "allowed_hosts": [],
-    "private_hosts": [],
-    "allowed_ports": [
-      443
+    "enabled": true,
+    "allowed_hosts": [
+      "127.0.0.1"
     ],
-    "proxy_mode": "direct",
-    "search_endpoint": "",
+    "private_hosts": [
+      "127.0.0.1"
+    ],
+    "allowed_ports": [
+      80,
+      443,
+      8888
+    ],
+    "proxy_mode": "system",
+    "search_endpoint": "http://127.0.0.1:8888/search",
     "credential_env": "",
-    "authorization": "",
-    "declared_cost": ""
+    "authorization": "Local operator configuration: public HTTP(S) and local SearXNG search",
+    "declared_cost": "Public HTTP requests; no paid search API configured",
+    "allow_public_hosts": true,
+    "search_provider": "searxng",
+    "timeout": 30
   },
   "browser": {
-    "enabled": false,
+    "enabled": true,
     "playwright_package": "",
     "node_executable": "",
     "chromium_directory": "",
-    "readonly_urls": [],
+    "readonly_urls": [
+      "*"
+    ],
     "writes_enabled": true,
     "write_urls": [],
     "input_env": {}

@@ -18,13 +18,14 @@ def install_network_tools(context, raw, *, transport=None):
     policy = NetworkPolicy.from_config(raw)
     cfg = raw.get("network", {})
     endpoint = cfg.get("search_endpoint", "")
-    adapter = SearxngWebAdapter(endpoint)
+    from core.tools.ddg_adapter import DuckDuckGoAdapter
+    adapter = DuckDuckGoAdapter() if cfg.get("search_provider") == "duckduckgo" else SearxngWebAdapter(endpoint)
     credential_name = cfg.get("credential_env", "")
     credential_host = urlsplit(endpoint).hostname
     def credential(host):
         return os.environ.get(credential_name) if credential_name and host == credential_host else None
     network = NetworkService(policy, transport, credential, credential_host=credential_host)
-    context.network_service = NetworkTools(context, SearchService(network, context.artifacts, adapter, adapter))
+    context.network_service = NetworkTools(context, SearchService(network, context.artifacts, adapter, SearxngWebAdapter(endpoint)))
     context.network_records = NetworkRecords(context.operation_ledger)
     common = {"cursor": {"type": "string"}, "refresh": {"type": "boolean"}}
     for name, properties, required in [

@@ -25,11 +25,12 @@ class NetworkPolicy:
     proxy_mode: str = "direct"
     authorization: str = ""
     declared_cost: str = ""
+    allow_public_hosts: bool = False
 
     @classmethod
     def from_config(cls, config):
         raw = config.get("network", {})
-        return cls(enabled=raw.get("enabled", False), allowed_hosts=tuple(raw.get("allowed_hosts", [])),
+        return cls(allow_public_hosts=raw.get("allow_public_hosts", False), enabled=raw.get("enabled", False), allowed_hosts=tuple(raw.get("allowed_hosts", [])),
                    private_hosts=tuple(raw.get("private_hosts", [])),
                    allowed_ports=tuple(raw.get("allowed_ports", [443])),
                    timeout=raw.get("timeout", 10), max_redirects=raw.get("max_redirects", 3),
@@ -38,8 +39,8 @@ class NetworkPolicy:
                    declared_cost=raw.get("declared_cost", ""))
 
     def __post_init__(self):
-        if type(self.enabled) is not bool or self.proxy_mode != "direct":
-            raise ValueError("network enabled must be boolean; only direct/no-proxy transport is supported")
+        if type(self.allow_public_hosts) is not bool or type(self.enabled) is not bool or self.proxy_mode not in {"direct", "system"}:
+            raise ValueError("network enabled must be boolean; proxy_mode must be direct or system")
         if type(self.timeout) not in (int, float) or not math.isfinite(self.timeout):
             raise ValueError("finite network timeout required")
         if any(type(v) is not int for v in (self.max_redirects, self.max_bytes, self.cache_seconds)):
@@ -68,7 +69,7 @@ class NetworkPolicy:
             raise NetworkError("url_denied", "invalid URL authority") from None
         if parsed.scheme not in {"http", "https"} or parsed.username is not None or parsed.password is not None:
             raise NetworkError("url_denied", "only HTTP(S) without embedded credentials is allowed")
-        if host not in self.allowed_hosts or port not in self.allowed_ports:
+        if not host or (not self.allow_public_hosts and host not in self.allowed_hosts) or port not in self.allowed_ports:
             raise NetworkError("host_denied", "host/port is outside the explicit allowlist")
         if (host == "localhost" or host.endswith((".localhost", ".local", ".internal"))) and host not in self.private_hosts:
             raise NetworkError("private_address", "local host requires explicit private exception")

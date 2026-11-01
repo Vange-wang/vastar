@@ -45,7 +45,7 @@ class SearchService:
         if type(page_size) is not int or not 1 <= page_size <= 10:
             raise NetworkError("invalid_parameters", "search page_size must be 1..10")
         url = self.provider.search_url(query, page)
-        source = self.source(url, cancel, usage, types=("application/json",), refresh=refresh)
+        source = self.source(url, cancel, usage, types=getattr(self.provider, "content_types", ("application/json",)), refresh=refresh)
         results = self.provider.search_results(source["body"])
         offset = self._offset(cursor, url, source)
         if offset > len(results):
@@ -63,7 +63,7 @@ class SearchService:
         end = offset + len(rows)
         return {"status": "ok" if results else "empty_results", "results": rows,
                 "next_cursor": self._cursor(url, source, end) if end < len(results) else None,
-                "provider_page": page, "next_provider_page": page + 1 if results and page < 100 else None,
+                "provider_page": page, "next_provider_page": page + 1 if results and page < 100 and getattr(self.provider, "supports_pages", True) else None,
                 "provider_has_more": "unknown", "source_artifact": source["meta"].uri}
 
     def read(self, url, cancel, usage, *, cursor=None, max_chars=8000, refresh=False):
