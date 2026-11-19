@@ -1,1 +1,17 @@
+# Vastar 依赖清单（更新于 2026-09-20，zcode _zc，随任务单 TASK-2026-09-20-01）
+#
+# 运行依赖（TUI 路线 A 裁定：prompt_toolkit 行式 REPL，版本钉死，零补丁）：
 prompt_toolkit==3.0.53
+#
+# 开发 / CI 门依赖（铁律 V8：pytest/ruff 第一天就在）：
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.8
+#
+# 说明：
+# - LLM 调用走标准库 urllib（OpenAI 兼容流式 SSE，零额外依赖可跑）。
+# - 精确 tokenizer（tiktoken / provider 离线 tokenizer）按裁定推迟到阶段二随 RAG 引入：
+#   见 collab/decisions/2026-09-20-token-gate-ruling_hm.md（Vange 选②）。
+# - openai SDK 暂不引入；若后续切换 SDK，须先落裁定件（铁律 V1）。
+# tiktoken>=0.7       # 阶段二：精确 tokenizer
+# openai>=1.40        # 若改用官方 SDK

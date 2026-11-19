@@ -40,7 +40,7 @@ def _fmt_task_view(d: dict) -> str:
 
 
 def _failure_summary(d: dict) -> str | None:
-    """Vastar runtime component."""
+    """失败运行的一句话原因 + 下一步（HM-151：不靠时间戳反推；取自最后一次带错尝试）。"""
     run = d["run"]
     if (run["terminal_state"] or run["state"]) != "FAILED":
         return None
@@ -59,7 +59,10 @@ def _failure_summary(d: dict) -> str | None:
 
 
 def _fmt_run_view(d: dict) -> str:
-    """Vastar runtime component."""
+    """运行链人话面（HM-151）：状态·原因·尝试与模型·下一步；占位记号一律写人话。
+
+    因果链派生说明等内部明细不进人话面（Vange 卡点），照旧走 /trace run --json。
+    """
     run = d["run"]
     lines = [f"运行 {run['run_id']} · 状态 {run['terminal_state'] or run['state']}"
              f" · 结束原因 {run['finish_reason'] or '未记录'}"]

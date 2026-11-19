@@ -1,4 +1,11 @@
-"""Vastar runtime component."""
+"""move_file：移动 / 重命名（TASK-24 写操作组；R25 / QD-121）。
+
+- 目标已存在（文件对文件）→ 覆盖语义：执行层在询问前备份目标（OpPlan.backup_source）；
+  目录目标已存在 → 拒绝（不支持目录合并，请换目标名）；
+- 跨盘移动 = 复制到临时名 → 校验（大小/条目一致）→ 成功后才删源；中途失败保留源
+  并清理临时文件（QD-121，注入失败用例锁定）；
+- 权限判定不在本文件（执行层收口，机械 grep 门）。
+"""
 
 from __future__ import annotations
 
@@ -76,7 +83,7 @@ def plan(args: dict, *, resolved_path: Path, resolved_extra=None) -> OpPlan:
     targets = [src, dest]
     if recursive:
         # B10：目录移动展开受影响后代全集——嵌套硬拒项才能被执行层整批一票否决
-        
+        # （与 delete_path 同口径，QD-113）；链接/junction 后代显式点名进 detail
         entries = sorted(src.rglob("*"))
         links = [str(p) for p in entries if impact_scan.is_link(p)]
         if links:

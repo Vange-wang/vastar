@@ -1,4 +1,17 @@
-"""Vastar runtime component."""
+"""RunLifecycleMixin：Run 派发与收尾（QD-008 / 铁律 V6，从 SessionCoordinator 拆出）。
+
+职责段（与输入接受/会话管理分层）：`_dispatch`（冻结历史、建 Run、派发）、
+`_emit_checked`（事件单入口：迟到数据拦截 + 呈现 + 落库缓冲）、`_finish_run`
+（durability 落定、终态落库、快照、暂停语义）、`continue_last`（/continue 手动续写，
+TASK-34 §C(2)）。
+
+宿主（SessionCoordinator）须持有的字段：
+_active / _writer / _store / _runtime / _renderer / _primary / _fallback /
+_retry_policy / _prompt_bundle / _token_cfg / _context_cfg / _config_id /
+_pending / _cancel_pending / _pause_after_interrupt / late_events_dropped /
+last_result / session_id / mode / model_catalog / _origin / _seq / _wake /
+_skills（B11：/skill 显式通道消费点，见 core/skills/session_hook.py）。
+"""
 
 from __future__ import annotations
 
@@ -16,7 +29,7 @@ class RunLifecycleMixin:
         run_id = item.run_id  # 提交时已分配（uuid，全局唯一）
         self._store.pending_state(run_id, "running")
         # 执行时才确定所接历史；排除本条输入（其原文由 ContextAssembler 单独注入，避免重复）
-        
+        # TASK-34：/continue 续写（item.continuation_of 非空）不排除——历史末尾的
         # partial 回答（assistant）正是续写前缀，且本条不落新用户消息。
         from core.compact_runtime import CompactBoundary
         from core.context import SourceMessage
@@ -27,7 +40,7 @@ class RunLifecycleMixin:
             m for m in self._store.history_messages(self.session_id)
             if item.continuation_of or m.message_id != item.message_id
         ]
-        
+        # 层②输入：仅 status=approved 的压缩快照参与装配（pending/回滚不生效，TASK-11）
         request = RunRequest(
             run_id=run_id, session_id=self.session_id,
             input_message_id=item.message_id, input_text=item.text,
@@ -113,7 +126,7 @@ class RunLifecycleMixin:
                 f"打断输入已执行；队列剩余 {len(self._pending)} 条暂停"
                 + ("（提交新输入后按序继续）" if self._pending else ""))
 
-    
+    # ---- /continue 手动续写（TASK-34 §C(2)） -----------------------------------------
 
     def continue_last(self) -> tuple[bool, str]:
         """以上一条不完整回答为前缀续写（新 Run；DB 追加为相邻的第二条 assistant 消息，
@@ -125,7 +138,7 @@ class RunLifecycleMixin:
         last = self.last_result
         if last is None or last.status != "incomplete" or not last.partial:
             return False, "没有可续写的回答（上一条已完整或不存在）"
-        from core.harness.task_execution import continue_precheck  
+        from core.harness.task_execution import continue_precheck  # HM-148：任务态只读预检
         blocker = continue_precheck(self._store, self.session_id)
         if blocker:
             return False, blocker   # 当场说清真实原因与可用动作，不再跑出一个 needs_input 空 Run

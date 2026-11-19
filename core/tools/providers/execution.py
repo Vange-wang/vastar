@@ -15,6 +15,7 @@ async def execute(context, spec, args, session_id, run_id, operation_id, cancel,
         require(service is not None, 'provider_unavailable')
         sid = spec.server_id or args.get('server_id')
         require(isinstance(args, dict) and sid in service.servers and service.config.get('enabled'), 'provider_disabled')
+        require(service.servers[sid].config.get('enabled', True), 'provider_disabled')
         action = args.get('action') if not spec.server_id else 'call'
         if action != 'call':
             require(set(args) == {'action', 'server_id'} and action in {'status', 'discover', 'disconnect'}, 'provider_invalid_action')
@@ -106,6 +107,11 @@ async def run(context, service, spec, args, sid, action, session_id, run_id, dig
             contract={'capability': spec.capability, 'verification': 'unavailable',
                       'next_action': 'manual reconciliation; no resend' if unknown else 'explicit reconnect required'},
             redact_result_preview=True)
+    finally:
+        provider = service.servers[sid]
+        control.facts['protocol'] = provider.negotiation
+        if getattr(provider, 'last_process', None):
+            control.facts['stdio'] = provider.last_process
 
 
 def perform(service, spec, args, sid, action, control):
@@ -117,6 +123,7 @@ def perform(service, spec, args, sid, action, control):
     token = Cancellation(control)
     usage = control.facts['network']
     if action == 'discover':
+        service.online.discard(sid)
         result = service.register(sid, provider.discover(token, usage))
         control.facts['catalog_versions'] = {n: v for n, v in service.versions.items() if n.startswith(sid + ':')}
         control.before_commit()
@@ -135,6 +142,7 @@ def perform(service, spec, args, sid, action, control):
 class Cancellation:
     def __init__(self, control):
         self.control = control
+        self.run_id = control.request_id
 
     def is_set(self):
         check = getattr(self.control, 'authorization_check', lambda: True)

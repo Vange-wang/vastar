@@ -29,8 +29,8 @@ def characteristics(item):
     if money and (money["currency"] or money["scale"]):
         units = [(money["currency"] or "货币未声明") + (money["scale"] or "基本单位")]
     ambiguous = bool(re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", raw))
-    timezone = (re.search(r"(?:Z|[+-]\d\d:\d\d)$", raw).group()
-                if "T" in raw and re.search(r"(?:Z|[+-]\d\d:\d\d)$", raw) else
+    timezone = (re.search(r"(?:Z|[+-]\d{2}:\d{2})$", raw).group()
+                if "T" in raw and re.search(r"(?:Z|[+-]\d{2}:\d{2})$", raw) else
                 "未声明" if re.match(r"\d{4}-\d\d-\d\d[ T]", raw) else None)
     return {"units": units, "ambiguous_date": ambiguous, "timezone": timezone}
 

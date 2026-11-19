@@ -1,0 +1,26 @@
+[
+  {
+    "name": "python",
+    "version": "3.11.9",
+    "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip",
+    "sha256": "009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b"
+  },
+  {
+    "name": "prompt_toolkit",
+    "version": "3.0.53",
+    "url": "https://files.pythonhosted.org/packages/54/6f/84908cad2d6aa5144abcf7b42709fe4fdb459bc640ec7ac5786e7693dabc/prompt_toolkit-3.0.53-py3-none-any.whl",
+    "sha256": "01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2"
+  },
+  {
+    "name": "wcwidth",
+    "version": "0.8.4",
+    "url": "https://files.pythonhosted.org/packages/39/cc/9c0adc5861020de426ec71716b6c1bef8d90694b7d6d0a16202cdb1647f5/wcwidth-0.8.4-py3-none-any.whl",
+    "sha256": "2097bb1d28a0ba8fe177c2eb607317f9b1627b03f33ebebfd3da670b337a65ba"
+  },
+  {
+    "name": "playwright",
+    "version": "1.63.0",
+    "url": "https://files.pythonhosted.org/packages/76/eb/d6b8d92658038e260dbc7dd69fb3fdbe245aac283953de8b50b02bfe5f61/playwright-1.63.0-py3-none-win_amd64.whl",
+    "sha256": "2f9a707a6c6c91157ed77bff2b8caeb04b3c8d46e70d585fc134298cbe4b5cc6"
+  }
+]

@@ -1,4 +1,21 @@
-"""Vastar runtime component."""
+"""追踪查询视图（B40.02，TASK-2026-10-05-77）：统一关联 task/step/run/attempt/call/operation/artifact + 回放。
+
+红线与口径：
+- **只读**：全部 SELECT；回放只重建视图，**不执行工具**（本模块不持有 executor/registry 引用，
+  无任何写路径）；观察面不触授权（无 permissions 入参，不是第二授权源）。
+- **三态诚实**：事件信封**无**独立 correlation/causation 字段（已检出：全仓零命中）——本模块
+  不伪造；因果链由既有身份键**派生**：event_id=run_id-seq（Run 内序）、runs.retry_of_run_id
+  （重试父子）、runs.task_id/step_id、tool_operations.run_id、history_model_calls.run_id、
+  artifacts.source_ref。
+- **脱敏**：payload/记录渲染前过 memory/policy.sensitive（R25 口径实现处），命中即整体掩码。
+- **同源**：查询直读业务库（与执行同源），不另建观测旁库。
+- **保留策略**（RETENTION_POLICY 明示）：events 只增不删（用户遗忘流程 memory/forget_cleanup.py
+  除外）；产物由 retention 列约束删除时机（core/artifacts.py）；memory_revisions 只增不删。
+
+直读说明：runs/attempts/history_model_calls 无仓储只读方法，本模块在 store._lock 下直读
+（沿用 core/harness/checkpoints.py watermark() 的既有先例）；events/tasks/operations/artifacts
+走本批新增的仓储只读方法（events_page/tasks_open/operations_pending/artifacts_page）。
+"""
 from __future__ import annotations
 
 import json
@@ -14,7 +31,11 @@ PAGE_SIZE_MAX = 200
 
 
 def redacted(value, _key=None):
-    """Vastar runtime component."""
+    """递归脱敏：命中 R25 敏感口径即整体掩码（视图层最后一步，不改库）。
+
+    两道闸（HM-156/TASK-82）：① 字符串**值内容**命中即掩码；② dict **键名**命中
+    敏感口径（键名+"=" 喂给同一个 memory.policy.sensitive 判定，不另造一套）→
+    该键的值整体掩码——修复递归丢失 key 上下文导致的结构化脱敏缺口。"""
     if _key is not None and sensitive(f"{_key}="):
         return "[已脱敏]"
     if isinstance(value, str):
@@ -27,7 +48,8 @@ def redacted(value, _key=None):
 
 
 def _redact_error_json(raw):
-    """Vastar runtime component."""
+    """attempts.error_json 的结构化脱敏（HM-152/156）：details 内敏感键按名掩码，
+    code/message 保持可读（HM-151 人话面要读它）；非 JSON 原文退回值内容口径。"""
     try:
         return json.dumps(redacted(json.loads(raw)), ensure_ascii=False)
     except ValueError:
@@ -62,8 +84,8 @@ def trace_run(store, run_id: str) -> dict:
     if not rows:
         raise ValueError("Run 不存在；禁止静默重建")
     run = rows[0]
-    
-    
+    # HM-152/156：error_json 先摘出做结构化脱敏——若随整行过 redacted()，键名命中会把
+    # 整串 JSON 淹没成"[已脱敏]"，人话面就读不到 code/message（HM-151 结构不动，只补原因）。
     attempts = []
     for a in _rows(store, "SELECT attempt_id, attempt_index, provider, model, started_at,"
                          " finished_at, usage_json, error_json FROM attempts WHERE run_id=?"
@@ -100,7 +122,7 @@ def replay_run(store, run_id: str, *, cursor=None, page_size: int = PAGE_SIZE_DE
             raise ValueError("游标不属于该 Run（显式失效，不静默当首页）")
         after = int(payload["after_seq"])
     events = store.events_page(run_id, after_seq=after, limit=_clamp_page_size(page_size) + 1,
-                               inclusive=cursor is None)   
+                               inclusive=cursor is None)   # HM-155：首页包含起点（seq0 不漏），翻页仍排他
     page = events[:_clamp_page_size(page_size)]
     has_more = len(events) > len(page)
     next_cursor = (encode_cursor({"kind": "replay", "run_id": run_id,

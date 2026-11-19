@@ -1,4 +1,9 @@
-"""Vastar runtime component."""
+"""delete_path：可逆删除（TASK-24 写操作组；R25 / QD-117）。
+
+必须可逆：优先移入系统回收站（safety.recycle_delete）；不可用则移入项目内
+memory/_trash/<时间戳>-<短随机>/（保留项目内相对结构），结果必含可恢复路径；
+项目外删除若回收站不可用 → 执行层已 DENY（禁硬删）。权限判定不在本文件。
+"""
 
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ def plan(args: dict, *, resolved_path: Path, resolved_extra=None) -> OpPlan:
     if resolved_path.is_dir():
         count, total = safety.dir_stats(resolved_path)
         # 受影响全集 = 目录自身 + 展开条目：嵌套的硬拒项（如目录内的受保护文件名）
-        
+        # 才能被执行层的整批一票否决拦住（QD-113：不得部分执行）
         entries = sorted(resolved_path.rglob("*"))
         # B10：影响面事实——链接/junction 后代显式点名（不跟随、不探测目标内容）
         links = [str(p) for p in entries if impact_scan.is_link(p)]

@@ -1,4 +1,21 @@
-"""Vastar runtime component."""
+"""环境事实注入（TASK-26 交付项 B / ISSUE-HM-054 / R25 补充⑩系列）。
+
+现象：用户桌面/文档/下载常被系统重定向（注册表 User Shell Folders），按
+`%USERPROFILE%\\Desktop` 默认探测会得到**错误路径**（实机教训）。
+
+口径（任务单 ②，逐条落死）：
+- **动态读取**注册表 `HKCU\\...\\User Shell Folders` 的 Desktop / Personal /
+  Downloads GUID / My Pictures / My Music / My Video，并展开 `%USERPROFILE%` 等
+  环境变量；**禁止写死任何路径**（路径属易变量）；
+- 单条缺失 → 用 `%USERPROFILE%\\<标准名>` 兜底（此时注册表可读 = 机器真实配置
+  可知，缺条目按 Windows 默认位置解释）；环境变量展开不了 → 该条不注入；
+- **注册表整体读不到（或非 Windows）→ 整段不注入**——严禁注入默认错路径
+  （模拟读取失败用例锁定）；读失败留运行日志（红线 3：不静默）；
+- **仅事实告知，不构成写入白名单**——写入这些位置仍按权限判定（项目外仍 ASK），
+  该句必须出现在注入段内；
+- 注入位置 = 运行时渲染进系统提示词的「环境事实」段（不写进 prompts/system.md
+  静态文本，与 TASK-20 元数据纪律一致）。
+"""
 
 from __future__ import annotations
 

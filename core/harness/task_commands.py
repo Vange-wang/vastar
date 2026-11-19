@@ -18,8 +18,9 @@ HELP = ("/task new <自然语言目标> 模型起草计划草案；/task ok [--j
         "/task drop 放弃草案；/task accept [--json] <JSON: goal,acceptance,constraints,budget,steps>"
         "（budget 须含 \"max_calls\": 正整数；默认人话摘要，--json 输出明细）；/task status；"
         "/task attach <Task ID>；/task step <Step ID>；/task resume；/task budget [single|worker]；"
-        "/task reconcile <Operation ID>；/task validate <JSON: step_id,evidence>；"
+        "/task reconcile <Operation ID>；/task validate <JSON: step_id,evidence>；/task deliver [验收键到operation_id的JSON] 本轮验收交付；"
         "/task answer <JSON: question_id,answer>；/task cancel-question <ID>；/task tools enable。"
+        "明确的自然语言操作目标也可起草；/task ok 前不执行工具。"
         "accept/new+ok/attach 显式关联任务；step 选定后普通输入执行；旧会话不自动变成任务。")
 
 
@@ -36,24 +37,30 @@ async def task_command(coord, arg):
     if not hasattr(coord, "task_service"):
         raise ValueError("任务服务未装配")
     cmd, _, tail = arg.partition(" ")
+    if cmd in {"new", "ok"}:
+        from core.llm.pricing import require_task_model
+        require_task_model(coord)
     service, session = coord.task_service, coord.session_id
     if cmd in {"", "help"}:
         return HELP
     if cmd == "accept":
         as_json = tail.startswith("--json")
         data = json.loads(tail[6:].strip() if as_json else tail)
-        require_max_calls(data.get("budget"))   
-        blocker = artifacts_blocker(coord)   
+        require_max_calls(data.get("budget"))   # HM-146：accept 期即校验（给示例）
+        blocker = artifacts_blocker(coord)   # HM-149：产物库不可用在落库前拦（B13 口径不变）
         if blocker:
             raise ValueError(blocker)
         task = service.accept(session, _source(coord, arg), **data)
-        return present_result(checkpoint_command(coord, task), as_json=as_json)   
+        return present_result(checkpoint_command(coord, task), as_json=as_json)   # HM-145
     if cmd == "new":
-        return await task_new_command(coord, tail)   
+        return await task_new_command(coord, tail)   # HM-144：模型起草（走正常 Run）
     if cmd == "ok":
         return task_ok_command(coord, tail)          # 用户显式确认 → 复用 accept 落库
     if cmd == "drop":
         return task_drop_command(coord)
+    if cmd == "deliver":
+        from core.harness.task_delivery import deliver_task
+        return deliver_task(coord, tail)
     if cmd == "attach":
         coord.ensure_session()
         return service.attach(session, tail.strip())

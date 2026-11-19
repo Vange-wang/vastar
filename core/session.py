@@ -1,4 +1,12 @@
-"""Vastar runtime component."""
+"""SessionCoordinator：输入队列、活动 Run、取消控制、输入顺序（基线 §3）。
+
+关键语义（采纳件 §3.2/§3.4）：
+- 排队时冻结输入内容，开始执行时才确定它应接上的会话历史（避免第二条看不到第一条回答）；
+- 输入接受→持久化后确认（数据层未就绪时不得标记"已持久化提交"）；
+- 取消后不自动执行下一条排队消息（队列保留并提示）；interrupt 模式下新输入触发当前 Run
+  取消，取消收尾后以新 Run 执行该输入，其余排队消息暂停；
+- 运行状态只有一个修改入口：键盘/网络/存储动作都汇入本协调器按序处理。
+"""
 
 from __future__ import annotations
 
@@ -33,7 +41,7 @@ class PendingInput:
     retry_of_run_id: str | None = None
     run_id: str | None = None
     explicit_skill: str | None = None   # 提交时绑定，不能让此前排队输入消费后来的安排
-    continuation_of: str | None = None
+    continuation_of: str | None = None   # TASK-34：/continue 手动续写（值为被续写的
                                          # run_id；此时 text 为空、不落新用户消息）
     sequencer: EventSequencer = field(default_factory=EventSequencer)   # B03.01：一个 Run
                                          # 一个分配器——提交侧（input.accepted）与派发侧
@@ -105,7 +113,7 @@ class SessionCoordinator(SessionResumeMixin, RunLifecycleMixin, ModelSwitchMixin
         self._stopped = False
         self._pause_after_interrupt = False
         self._cancel_pending = False
-        self._last_user_input: str | None = None
+        self._last_user_input: str | None = None   # KM-01：新会话 /retry 不崩   # 已提交未派发的取消请求（Ctrl+C 竞态收口）
 
     # ---- 生命周期 ---------------------------------------------------------------
 
@@ -149,7 +157,12 @@ class SessionCoordinator(SessionResumeMixin, RunLifecycleMixin, ModelSwitchMixin
         self._wake.set()
 
     def _persist_user_message(self, text: str, origin: str) -> tuple[str, int]:
-        """Vastar runtime component."""
+        """持久化用户消息并返回 (message_id, submit_seq)（submit/retry_last 共用，KM-23）。
+
+        id 全局唯一（submit_seq 只做会话内排序）——--continue 换实例后计数器
+        从 1 重来，若 id 含 seq 必与既有记录撞主键（铁律：落库事实不可被覆盖）；
+        持久化先于确认（基线 §4：输入接受→持久化后确认）。
+        """
         submit_seq = next(self._seq)
         message_id = f"m-{uuid.uuid4().hex}"
         self._store.append_message(
@@ -273,7 +286,11 @@ class SessionCoordinator(SessionResumeMixin, RunLifecycleMixin, ModelSwitchMixin
         return "ok" if self._writer.last_error is None else "degraded"
 
     def storage_health_detail(self) -> str:
-        """Vastar runtime component."""
+        """/status 用：degraded 必须可解释（ISSUE-HM-008）——原因 + 未落盘条数 + 恢复方式。
+
+        恢复语义（QD-003 收口，方案①真恢复）：下一次成功写入后自动恢复
+        （writer 的 _failed 与 _last_error 同步复位，无半恢复态）。
+        """
         status = self._writer.storage_status()
         detail = (f"{status['health']}；pending_count={status['pending_count']}；"
                   f"durability={status['durability']}（未落盘 {status['pending_count']} 条事件）")

@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""分页接口（TASK-45/B10 冻结 PageRequest/PageResult 数据形态；TASK-51/B16 起接线实现）。
+
+B16 落地：游标 = base64url(JSON)（键序无关 sort_keys；空白无关）；PageResult.items 对
+大输出产物 = (字节分片,)；编解码失败必须显式（ValueError），禁静默当首页。
+"""
 from __future__ import annotations
 
 import base64

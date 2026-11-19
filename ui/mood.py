@@ -1,9 +1,15 @@
-"""Vastar runtime component."""
+"""TASK-116 §6⑤ agent 心情：随现有生成流携带的标记解析（**零额外付费调用**）。
+
+模型在正文/思考流里择机写出 `[[mood:词|颜文字]]`（时机与次数完全由 LLM 随机自定，
+系统不规定）；本模块把标记从可视文本中剥离并产出 (词, 颜文字)，状态行只负责渲染。
+- 词：短词/简单词 ≤7 字符为引导，**硬上限 15**（超出截断）；颜文字上限 16。
+- 残缺标记跨 delta 缓冲拼接；超长/畸形标记**按原文显示**（不静默吞内容，V2）。
+"""
 from __future__ import annotations
 
 MARK = "[[mood:"
 MAX_MARKER_CHARS = 64      # 超过即判定非标记，按原文放行（防无限缓冲）
-WORD_HARD_CAP = 15
+WORD_HARD_CAP = 15         # Vange 三次追正：硬上限 15
 KAOMOJI_CAP = 16
 DEFAULT_MOOD = ("Calm", "(-_-)")
 

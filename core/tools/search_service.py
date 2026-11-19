@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from core.harness.network_policy import NetworkError
 from core.tools.pagination import decode_cursor, encode_cursor
+from core.tools.web_challenge import reject_challenge
 from memory.repositories.tasks import encode
 
 
@@ -70,6 +71,7 @@ class SearchService:
         if type(max_chars) is not int or not 1 <= max_chars <= 8000:
             raise NetworkError("invalid_parameters", "max_chars must be 1..8000")
         source = self.source(url, cancel, usage, types=("text/html", "text/plain"), refresh=refresh)
+        reject_challenge(source)
         extracted = self.extractor.extract(source["body"], source["content_type"])
         offset = self._offset(cursor, url, source)
         text = extracted["text"]

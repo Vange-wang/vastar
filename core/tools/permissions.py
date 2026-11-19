@@ -1,4 +1,18 @@
-"""Vastar runtime component."""
+"""权限闸门（Spec §5 / R20 / R25）——执行层统一收口。
+
+两级口径：
+- 级别闸门（A/B/C/D）：R25 起权限 C 的「写文件」子项已开（写操作组 5 工具，本批实现）；
+  C 其余项（联网检索）与 D（执行代码/命令）仍关闭、声明式拒绝（默认 closed 保护：
+  当前无此类注册工具，后续接入须另立判定与裁定）。
+- 操作判定（TASK-24 ①B / R25）：写操作组按「动作类别 × 目标位置类别」三值判定
+  ALLOW / ASK / DENY（QD-114/QD-125：RECORD_ONLY 无适用场景、不设）；硬拒清单
+  任何档任何位置 DENY 且优先（QD-113，任一目标命中 → 整批 DENY）；批量
+  （>10 件 / >1MB / 递归目录）在项目内亦 ASK；删除一律 ASK（Vange 定案
+  「所有删除都问」，QD-122）。
+
+读取范围口径（R20）不变：整机只读 + 凭据类默认拒绝（黑名单在本模块统一持有，
+工具实现内零判定——机械 grep 门）；MSYS 风格路径不要求支持，拒绝原因不得误报。
+"""
 
 from __future__ import annotations
 
@@ -14,20 +28,20 @@ _LEVEL_D_NOTE = ("权限级 D 未开启（执行代码/命令待 Vange 明确点
 
 _MSYS_STYLE_RE = re.compile(r"^/[A-Za-z](/|$)")
 _CREDENTIAL_DIR_PARTS = {".ssh", ".hermes", ".aws"}
-
+# 读取侧黑名单（R20；TASK-26 E 项修订：.env 移出——读放开、写仍硬拒，见 _ENV_NAME_PATTERNS）
 _CREDENTIAL_NAME_PATTERNS = ("*.pem", "*.key", "*.p12", "*.pfx",
                              "id_rsa*", ".git-credentials", "*.kdbx", ".netrc",
                              ".netrc.*")
-
+# .env 家族（R25 补充⑫ / ISSUE-HM-056）：读按位置档（根内 ALLOW / 根外 ASK），写一律 DENY
 _ENV_NAME_PATTERNS = (".env", "*.env", ".env.*", "*.env.*")
 _CREDENTIAL_DIR_REASON = ("路径 {path} 位于默认保护的凭据目录（{matched}/）；"
                           "如确需读取，请让 Hermes 出裁定后显式放开")
 _CREDENTIAL_NAME_REASON = ("路径 {path} 属默认保护的凭据类（匹配 {matched}）；"
                            "如确需读取，请让 Hermes 出裁定后显式放开")
 _MSYS_REASON = ("疑似 MSYS 风格路径（{raw}）：请改用 Windows 形式"
-                "（如 D:\\… 或相对路径）")
+                "（请使用 {drive}: 盘符或相对路径）")
 
-
+# ---- 操作判定（TASK-24 ①B / R25） ----------------------------------------------------
 
 PERMISSION_ASK = "ask"
 PERMISSION_AUTO = "auto"
@@ -90,7 +104,7 @@ def resolve_read_path(project_root: Path, raw_path: str) -> Path:
     MSYS 风格与凭据类路径 → PathRejected（显式，禁静默）。
     """
     if _MSYS_STYLE_RE.match(raw_path.replace("\\", "/")):
-        raise PathRejected(_MSYS_REASON.format(raw=raw_path))
+        raise PathRejected(_MSYS_REASON.format(raw=raw_path, drive=raw_path[1].upper()))
     root = project_root.resolve()
     candidate = Path(raw_path)
     resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
@@ -122,10 +136,16 @@ _ENV_WRITE_REASON = ("硬拒清单① 凭据类 .env（写操作——防自我�
                      " key/base_url/fallback；读已按 R25 补充⑫放开，任何档任何位置拒绝写）")
 
 
-
+# ---- 硬拒清单与三值判定（TASK-24 ①B） -----------------------------------------------
 
 def location_of(resolved: Path, project_root: Path) -> str:
-    """Vastar runtime component."""
+    """目标位置类别：项目根内 in_root / 项目根外 out_root（根本身算根内）。
+
+    HM-104（B12 交付项 D·defense-in-depth）：入口先归一化 `..`（resolve 不要求
+    路径存在）——防未归一化路径词法逃逸（`proj/sub/../../outside/x` 实际根外，
+    此前会被词法判 in_root）；根内 `sub/../x` 归一化后仍在根内（语义不变）。
+    主路径 `resolve_read_path` 已 resolve，此处归一化幂等。
+    """
     resolved = Path(resolved).resolve()
     root = Path(project_root).resolve()
     try:
@@ -136,7 +156,7 @@ def location_of(resolved: Path, project_root: Path) -> str:
 
 
 def _system_dir_reason(resolved: Path) -> str | None:
-    """系统目录（硬拒③）：Windows 顶层系统目录 + C:\\Users\\<u>\\AppData 及以下。
+    """系统目录（硬拒③）：Windows 顶层系统目录 + %LOCALAPPDATA% / %APPDATA% 及以下。
 
     豁免：AppData\\Local\\Temp（OS 标准临时区——Vastar 原子写 mkstemp 亦落此，
     无保护价值；豁免口径随自测报告送审）。非绝对路径不判（交由其他类别）。
@@ -202,7 +222,15 @@ def hard_deny_reason(resolved: Path, project_root: Path,
 def decide_operation(*, action: str, targets: list[Path], project_root: Path,
                      count: int = 1, total_bytes: int = 0,
                      recursive: bool = False) -> OperationDecision:
-    """Vastar runtime component."""
+    """判定表（任务单 ①B，逐格有用例）：动作类别 × 位置类别 → ALLOW / ASK / DENY。
+
+    - 删除（delete）：任何位置 ASK（Vange 定案「所有删除都问」，QD-122）；
+    - 新建/编辑覆盖/移动：项目根内 ALLOW（备份照做）、项目外 ASK；
+    - 批量（>BATCH_FILE_LIMIT 件 / >BATCH_BYTES_LIMIT / 递归目录）：项目内亦 ASK，
+      且仅当"批量是触发 ASK 的原因"时会话记忆类别记为 batch（删除/项目外仍记原动作）；
+    - DENY 只由硬拒清单产生（执行层 hard_deny_reason 先行一票否决，QD-113），
+      本函数不再重复判定。
+    """
     out_root = any(location_of(t, project_root) == OUT_ROOT for t in targets)
     location = OUT_ROOT if out_root else IN_ROOT
     batch = count > BATCH_FILE_LIMIT or total_bytes > BATCH_BYTES_LIMIT or recursive

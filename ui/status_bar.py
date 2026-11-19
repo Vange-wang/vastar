@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""TASK-116 §6 状态行：模型＋思考程度 / 上下文占用 / session 名 / 时间栏 / 心情。
+
+全部只读：时间源用协调器既有 `_live_progress`（monotonic，真实时间，HM-091 教训）；
+session 名走只读 SQL（status_view 先例）；上下文为估算值，带 `~` 标明（token-gate 口径）。
+"""
 from __future__ import annotations
 
 import time
@@ -17,14 +21,14 @@ def _fmt_tokens(n) -> str:
 
 
 def model_label(coord, renderer) -> str:
-    """Vastar runtime component."""
+    """① 模型名＋思考程度（HM-178：去掉生效标签的 provider/ 前缀）。"""
     thinking = "开" if getattr(renderer, "thinking_enabled", True) else "关"
     model = str(coord.primary_label()).split("/", 1)[-1]
     return f"{model} · 思考{thinking}"
 
 
 def context_label(coord) -> str:
-    """Vastar runtime component."""
+    """② 当前占用／总上下文（HM-178：只留 `~占用/总量`，不带中文标签）。"""
     last = getattr(coord, "last_result", None)
     estimate = None
     if last is not None:

@@ -1,4 +1,13 @@
-"""Vastar runtime component."""
+"""流消费内核：provider 流 → 归一化事件（含取消竞速裁决）与 usage 记账。
+
+从 AttemptRunner 拆出（铁律 V6；TASK-42/B07 交付项 0——AttemptRunner 297/300
+余 3，先拆后改）。职责边界不变（采纳件 §2.2）：只含"竞速消费 → 逐帧归一化 →
+事件发射 / usage 累计"；结束分类、工具往返编排与终态收尾留在 AttemptRunner。
+
+KM-23 竞速保留差异说明：race_consume 与 AttemptRunner.retry_wait 的败者处理
+语义不同——前者取消后须 await 吸收 VastarError 并保持取消优先裁决，后者仅回
+布尔；合并需参数化反而复杂化，故不抽公共竞速器。
+"""
 
 from __future__ import annotations
 
@@ -19,7 +28,14 @@ from core.run_state import (
 
 
 def _merge_tool_deltas(existing: list | None, deltas: list) -> list:
-    """Vastar runtime component."""
+    """按 index 累积流式 tool_calls 增量（R19：参数跨片段完整拼出）。
+
+    id/name 取首个非空值（glm 负数 id **原样字符串**回传，R19 注意点②，禁类型转换）；
+    arguments 逐片段拼接；参数 JSON 空白差异由 json.loads 天然容忍（R19 注意点①）。
+    **MiMo 补全（TASK-26 F② 实测，R26 补充）**：部分兼容 provider 的增量**不带 id**
+    且回传 null id 被 400 拒（"`id` is null"）→ 合并后仍无 id 的调用合成稳定
+    `call_{index}`（形态仍为字符串，不与 glm 负数 id 冲突）。
+    """
     merged = list(existing or [])
     for delta in deltas:
         idx = int(delta.get("index", len(merged)))

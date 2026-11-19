@@ -31,6 +31,7 @@ from core.llm.factory import (  # noqa: E402
     build_provider_spec,
     load_env_file,
 )
+from core.llm.pricing import validate_task_pricing  # noqa: E402
 from core.llm.retry import RetryPolicy  # noqa: E402
 from core.path_cli import add_path_arguments, handle_maintenance  # noqa: E402
 from core.path_config import load_launch_config  # noqa: E402
@@ -63,11 +64,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def build_app(args: argparse.Namespace):
     """装配全部组件（本地、无网络）；返回运行所需对象集合。"""
     launch = load_launch_config(args, BASE_DIR)
+    validate_task_pricing(launch.raw)
     store = Store(launch.db_path,
+                  ownership_heartbeat_ttl=launch.raw.get("runtime", {}).get("ownership_heartbeat_ttl_s", 10),
                   require_existing=launch.paths.schema_version == 2 or args.continue_session)
     try:
         app = _assemble_app(args, launch, store)
-        app["config_path"] = str(launch.config_path)
+        app["config_path"] = str(launch.config_path)   # TASK-116 §8：称呼写回落点
         return app
     except BaseException:
         store.close()
@@ -94,25 +97,23 @@ def _assemble_app(args, launch, store):
 
     writer = StoreWriter(store)
     # R11：唯一入口 = vastar（inline 主路径）；全屏/输入框实验代码已整体删除
-
-
+    # （TASK-29 KM-25，Vange 2026-09-26 定案），届时按备忘件重建：
+    # collab/decisions/2026-09-26-ui-app-phase-backlog_hm.md
     renderer = Renderer(
         show_reasoning=bool(
             raw["llm"]["providers"][primary.name].get("show_reasoning", True)),
-
+        # TASK-12/HM-034：思考滚动窗口可见行数（默认 5，块高恒 ≤N+3=8 → 折叠必成）
         thinking_visible_lines=int(raw.get("ui", {}).get("thinking_visible_lines", 5)))
     tools_context, skills_context, artifacts = _assemble_tools(raw, paths, store)
-
+    # TASK-34：撞顶自动续写（Y=llm.continuation.max_count，独立预算键，默认启用）
     cont_cfg = raw["llm"].get("continuation", {})
-    continuation = ContinuationRunner(
-        enabled=bool(cont_cfg.get("enabled", True)),
-        max_count=cont_cfg.get("max_count", 2))
+    continuation = ContinuationRunner.from_config(cont_cfg)
     runtime = ReActRuntime(answer_message_id_factory=lambda s, r: f"{r}-assistant",
                            tools=tools_context,
                            env_facts=format_env_facts(raw.get("env")) + "\n" + paths.prompt_facts(),
                            continuation=continuation,
                            skills=skills_context)
-
+    # /model 可选清单 = 配置注册表全部 (provider, model) 组合（裁定 §二.2）
     model_catalog = [
         (name, model)
         for name, block in raw["llm"]["providers"].items()
@@ -134,7 +135,7 @@ def _assemble_app(args, launch, store):
         "coordinator": coordinator, "renderer": renderer, "store": store, "writer": writer,
         "agent_def": agent_def, "primary": primary, "fallback": fallback,
         "recovered_count": marked, "raw": raw,
-        "tools": tools_context,
+        "tools": tools_context,   # TASK-16：启动路径所需键显式暴露（不穿透 runtime 私有属性）
         "skills": skills_context,   # B11：技能上下文（/status 与测试同口径的公开键）
         "artifacts": artifacts,       # B16：产物库（测试与排障的公开键）
         "paths": paths,
@@ -157,6 +158,7 @@ def _assemble_tools(raw, paths, store):
     install_task_tools(tools_context, task_service)
     if orchestration.enabled:
         tools_context.team_management = task_service.management(orchestration, actor='user')
+        tools_context.team_entry_config = orchestration
     # B16：产物库（data_dir 未初始化 = legacy → put 时显式报错，不静默退化）
     artifacts = ArtifactStore(store, tools_context.data_dir,
                               owner=paths.project_id if paths else "")
@@ -185,6 +187,9 @@ def _assemble_tools(raw, paths, store):
     tools_context.skills = skills_context
     from core.history_tools import install_history
     install_history(tools_context, store, paths)
+    # TASK-151①②：checkpoint 三工具 + 自动快照器（round_trip 钩子取 ToolsContext.checkpoint_snapshots）
+    from core.tools.checkpoint_tools import install_checkpoint_tools
+    install_checkpoint_tools(tools_context, raw)
     return tools_context, skills_context, artifacts
 
 
@@ -199,7 +204,8 @@ def _setup_logging(log_dir: Path) -> None:
                 return
             root.removeHandler(h)
             h.close()
-    handler = logging.FileHandler(log_dir / "vastar.log", encoding="utf-8")
+    from core.maintenance_logging import SegmentHandler
+    handler = SegmentHandler(log_dir / "vastar.log")
     handler.setFormatter(logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s %(message)s"))
     root.addHandler(handler)
@@ -236,13 +242,25 @@ async def _serve_ui(app: dict, *, continue_session: bool) -> None:
             renderer.render_note(f"已续聊会话 {latest}（{history_count} 条历史消息）")
         else:
             renderer.render_note("没有可续聊的历史会话，已新建会话")
-
+    # TASK-116 §1/§2：欢迎页只留品牌与入口提示；预检段挪入 /status（启动快照，不重跑）。
     renderer.render_welcome(welcome_text())
     sandbox = getattr(app["tools"], "execution_sandbox", None)
     startup_facts = sandbox.preflight_text() if sandbox is not None else ""
     if app["recovered_count"]:
         renderer.render_note(
             f"崩溃恢复：{app['recovered_count']} 个未结束 Run 已标记 INTERRUPTED（不自动重跑）")
+    # TASK-151②：续会话时有可信快照则显式给出续跑点（无快照不提示；resume_status 可查全文）
+    if continue_session and coordinator.session_id:
+        snapshots = getattr(app["tools"], "checkpoint_snapshots", None)
+        if snapshots is not None and snapshots.data_dir is not None:
+            from core.harness.run_snapshot import CheckpointError, latest_snapshot
+            try:
+                snap = latest_snapshot(snapshots.data_dir, coordinator.session_id)
+                renderer.render_note(
+                    f"检测到 run 快照（{snap['run_id']}，更新于 {snap['updated_at']}）："
+                    f"{snap['resume_hint']}")
+            except CheckpointError:
+                pass
     ui = ReplUI(coordinator=coordinator, renderer=renderer,
                 tool_registry=app["tools"].registry,
                 ask_gate=app["tools"].ask_gate,

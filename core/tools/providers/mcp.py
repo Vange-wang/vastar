@@ -1,4 +1,4 @@
-"""Pinned MCP Streamable HTTP; no subprocess, redirects, ambient auth or automatic resend."""
+"""Negotiated MCP Streamable HTTP; no redirects, ambient auth or automatic resend."""
 import json
 import os
 import time
@@ -7,8 +7,9 @@ from urllib.parse import unquote, urlsplit
 
 from core.tools.network_transport import checkpoint
 from core.tools.providers.contract import ProviderError, require
+from core.tools.providers.protocol import VERSIONS, decode, negotiate
 
-VERSION = '2025-06-18'
+VERSION = VERSIONS[0]
 
 
 class ToolProvider:
@@ -24,19 +25,33 @@ class MCPProvider(ToolProvider):
     def __init__(self, config, network):
         self.config, self.network = dict(config), network
         self.session = None
+        self.protocol_version = None
+        self.negotiation = {}
+
+    def close(self):
+        self.session = None
+        self.protocol_version = None
 
     def discover(self, cancel, usage):
         self.session = None
-        result = self.rpc('initialize', {'protocolVersion': VERSION, 'capabilities': {},
-            'clientInfo': {'name': 'Vastar', 'version': '1.0'}}, cancel, usage)
-        require(result.get('protocolVersion') == VERSION and isinstance(result.get('capabilities', {}).get('tools'), dict),
-                'provider_protocol_unsupported')
-        self.rpc('notifications/initialized', {}, cancel, usage, notification=True)
-        result = self.rpc('tools/list', {}, cancel, usage)
-        require(isinstance(result.get('tools'), list) and not result.get('nextCursor'), 'provider_listing_incomplete')
-        return result['tools']
+        self.protocol_version = None
+        self.negotiation = {'requested': VERSION, 'returned': None, 'downgraded': None}
+        try:
+            result = self.rpc('initialize', {'protocolVersion': VERSION, 'capabilities': {},
+                'clientInfo': {'name': 'Vastar', 'version': '1.0'}}, cancel, usage)
+            self.protocol_version = negotiate(result)
+            self.negotiation = {'requested': VERSION, 'returned': self.protocol_version,
+                                'downgraded': self.protocol_version != VERSION}
+            self.rpc('notifications/initialized', {}, cancel, usage, notification=True)
+            result = self.rpc('tools/list', {}, cancel, usage)
+            require(isinstance(result.get('tools'), list) and not result.get('nextCursor'), 'provider_listing_incomplete')
+            return result['tools']
+        except Exception:
+            self.close()
+            raise
 
     def call(self, name, args, operation_id, cancel, usage, issued):
+        require(self.protocol_version is not None, 'provider_not_initialized')
         return self.rpc('tools/call', {'name': name, 'arguments': args,
             '_meta': {'vastar/operation_id': operation_id}}, cancel, usage, issued=issued)
 
@@ -62,6 +77,7 @@ class MCPProvider(ToolProvider):
             issued()  # durable uncertainty boundary BEFORE handing bytes to transport
             response = transport.send(url, address, headers, cancel, deadline,
                                       method='POST', body=json.dumps(message).encode())
+            require(response.status not in (401, 403), 'provider_identity_invalid')
             require(200 <= response.status < 300, 'provider_disconnected')
             token = response.headers.get('mcp-session-id')
             if token:
@@ -88,7 +104,7 @@ class MCPProvider(ToolProvider):
 
     def headers(self, url):
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
-                   'MCP-Protocol-Version': VERSION, 'Accept-Encoding': 'identity'}
+                   'MCP-Protocol-Version': self.protocol_version or VERSION, 'Accept-Encoding': 'identity'}
         secret = None
         if self.config.get('credential_env'):
             require(urlsplit(url).scheme == 'https', 'provider_auth_requires_https')
@@ -110,20 +126,5 @@ def read_reply(response, rid, network, cancel, deadline, usage):
         body += chunk
         usage['bytes'] = usage.get('bytes', 0) + len(chunk)
         require(usage['bytes'] <= network.policy.max_bytes, 'provider_result_too_large')
-        if kind == 'text/event-stream':
-            blocks = body.replace(b'\r\n', b'\n').split(b'\n\n')
-            for block in blocks[:-1]:
-                data = b'\n'.join(line[5:].lstrip() for line in block.splitlines() if line.startswith(b'data:'))
-                if data:
-                    return envelope(json.loads(data), rid)
-            body = blocks[-1]
         if not chunk:
-            require(kind == 'application/json', 'provider_disconnected')
-            return envelope(json.loads(body), rid)
-
-
-def envelope(value, rid):
-    require(isinstance(value, dict) and value.get('jsonrpc') == '2.0' and value.get('id') == rid,
-            'provider_unexpected_message')
-    require('error' not in value and isinstance(value.get('result'), dict), 'provider_remote_error')
-    return value['result']
+            return decode(body, kind, rid)

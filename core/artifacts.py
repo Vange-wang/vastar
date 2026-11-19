@@ -1,4 +1,14 @@
-"""Vastar runtime component."""
+"""ArtifactStore：大输出产物库（TASK-2026-10-02-51 / B16）。
+
+红线（任务单 ③）：
+- 内容只落 `<data_dir>/artifacts/`（受管目录）；`data_dir=None`（未初始化）→ 显式报错
+  （B13 口径），不静默退化；DB 只保元数据（十项齐 + owner/source_hash），大 blob 不进 SQLite；
+- 发布顺序 = 临时 blob → 原子发布（os.replace）→ 事务索引；索引失败即撤 blob——
+  任何路径都不给出"引用存在但读不到"；临时残留与无索引 blob 由 sweep_orphans 清理；
+- 引用绑版本（uri = artifact://<scope>/<id>/v<N>#<hash12>，不给可变路径）；
+  游标校验 owner/scope/hash，资源已变化/过期/损坏 → 显式失效（ArtifactGone）；
+- 删除有保留/审计规则；checkpoint 引用保护 = 规则与接口预留（B19 才实现 checkpoint）。
+"""
 from __future__ import annotations
 
 import hashlib
@@ -82,7 +92,7 @@ class ArtifactStore:
     # ---- A. 产物落盘 --------------------------------------------------------
 
     def available(self) -> bool:
-        """Vastar runtime component."""
+        """产物库是否可用（data_dir 已初始化；HM-149 前置拦截用，只读判定）。"""
         return self._data_dir is not None
 
     def _require_dir(self) -> Path:

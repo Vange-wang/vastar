@@ -36,6 +36,13 @@ async def deliver_partial(s, reason):
         return  # A withdrawn generation must not be revived as terminal evidence.
     body, receipts = evidence(s)
     pending = s.pending_terminal_text
+    if reason == 'reasoning_budget_exhausted':
+        from core.empty_content import NOTICE
+        s.result.partial, s.result.terminal_note = True, NOTICE
+        s.warnings.append(NOTICE)
+        text = pending or ('已取得工具回单（原文，不代表任务已完成）：\n' + receipts if receipts and not body.strip() else '')
+        await s.emit(s.factory.build(EventType.CONTENT_DELTA, {'text': text + '\n\n' + NOTICE, 'source': 'terminal_delivery'}))
+        return
     if not body.strip() and not pending.strip() and not receipts:
         return
     s.result.partial = True

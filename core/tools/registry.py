@@ -34,7 +34,12 @@ class ToolParamError(Exception):
 
 @dataclass
 class OpPlan:
-    """Vastar runtime component."""
+    """写操作计划（TASK-24）：工具实现只提供**事实**，判定全部在执行层（红线 2）。
+
+    工具通过 plan() 声明"会动到什么"（受影响目标全集 / 数量 / 字节 / 是否覆盖 /
+    是否递归）；执行层据此做硬拒清单一票否决、三值判定与批量识别——
+    ALLOW/ASK/DENY 判定、阈值与硬拒清单都不到工具实现里来。
+    """
 
     action: str                       # create / edit / move / delete（判定表动作主行）
     targets: list[Path]               # 受影响目标全集（目录操作 = 展开后的受影响项）
@@ -42,7 +47,7 @@ class OpPlan:
     overwrite: bool = False           # 是否覆盖既有目标（覆盖 → 备份底线）
     backup_source: Path | None = None  # 覆盖/改写前需备份的文件（None = 无需）
     reversible_delete: bool = False   # 删除类（可逆底线，询问提示"可逆删除"）
-    needs_recycle: bool = False       
+    needs_recycle: bool = False       # 项目外删除须系统回收站兜底（QD-117）
     target_count: int = 1
     total_bytes: int = 0
     recursive: bool = False
@@ -50,7 +55,20 @@ class OpPlan:
 
 @dataclass
 class ToolSpec:
-    """Vastar runtime component."""
+    """单个工具的登记项（Spec §3.1）。run 由执行层在权限判定通过后调用。
+
+    plan（可选）：写操作组工具提供 OpPlan 事实；只读工具为 None（走既有只读路径，
+    行为零变化）。plan/run 均由执行层以统一关键字签名调用（线程内执行）。
+
+    B10 统一契约六字段（TASK-45，声明即契约、测试逐格核对）：
+    - effect：副作用类型（read / write / move / delete）；
+    - resource_scope：资源范围（file / path=文件或目录 / tree=目录后代全集）；
+    - retryable：failed/unknown 后是否可原样重试（整体覆盖幂等=True；edit/move/delete=False）；
+    - cancel_phase：取消生效阶段（read=any——线程可能续跑但结果被丢弃；写组=before_commit——
+      提交点线性化，过点不谎称停止，B09）；
+    - reconcile：对账能力（reread / hash=expected↔actual sha256 / stats=条目字节比对 /
+      backup_restore=恢复凭据 / none）。
+    """
 
     name: str
     description: str
@@ -82,8 +100,8 @@ class ToolsContext:
     timeout_seconds: float | None = 30.0  # Explicit null disables the local tool deadline.
     max_calls_per_turn: int | None = 5    # Calls execute sequentially; null keeps every call.
     max_tool_rounds: int | None = 10      # Explicit null disables the round ceiling.
-    permission_mode: str = "ask"           
-    ask_timeout_s: float = 60.0            
+    permission_mode: str = "ask"           # TASK-24：ask（默认，写操作询问）/ auto（免问不放开硬拒）
+    ask_timeout_s: float = 60.0            # TASK-24：询问超时（QD-116），超时按 DENY
     operations: OperationRunner = field(default_factory=_make_operations)
     ask_gate: AskGate | None = None        # 询问闸门（进程内；None = 需确认时按拒绝处理）
     skills: object | None = None           # B11：SkillsContext（round_trip 落模型通道事件；

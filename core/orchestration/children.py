@@ -1,4 +1,25 @@
-"""Vastar runtime component."""
+"""B43 只读子 Agent 委派（TASK-2026-10-09-86）：ChildSupervisor 与子 Run 映射。
+
+Interface 语义（DoD-1；宿主侧接口，**不对模型暴露**）：
+
+- ``delegate(jobs)`` —— fan-out 准入。每个 ``ChildJob``（plan/profile/step_id/accept）
+  依次**同步**准入（顺序确定）：① **只读闸**——请求了非 read 效果工具的 envelope
+  直接拒（`blocked`，不触达 provider）；② 走 B42 `Scheduler.admit`（权限父∩角色∩任务∩
+  沙箱、预算预留、深度/容量/去重校验）。单项准入失败**只记该子项为终态结果**，
+  其余子项照常起跑（B43-A：失败仍保留部分成果）。返回 child_id 元组。
+- ``wait(timeout=None)`` —— fan-in。返回 {child_id: TaskResult}（仅已完成者；
+  `timeout` 秒到点即止，**不取消**仍在跑的子项）。结果只含 summary/evidence/
+  artifact/remaining_work/usage——**子原始全文不随 wait 回灌父级**（C08 省流口径），
+  需要全文时由父级按需调 ``read_report(child_id)``。
+- ``status()`` —— 每子项一行：child_id / step_id / state（running 或终态）/
+  run_id（子 Run 映射，取自子事件流首帧）/ 事件数。
+- ``cancel(child_id=None)`` —— **真取消**：cancel 子 asyncio 任务并 await 落定，
+  CancelledError 贯穿到 provider 流（无孤儿后台任务、预算预留随 settle 释放）；
+  子结果 = cancelled 且保留已产出片段。child_id 不存在或已终态 → 显式 ValueError。
+
+边界：初版只回父级、不广播（B43.01）；orchestration 默认关闭（disabled 时准入即拒，
+不触达 provider）；不开执行网、不做 DAG/租约（B44+）。
+"""
 import asyncio
 import itertools
 import time

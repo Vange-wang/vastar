@@ -1,4 +1,29 @@
-"""Vastar runtime component."""
+"""Renderer：事件 → 呈现（独立通道；不反向驱动执行，采纳件 §2.2）。
+
+颜色纪律（基线 §1）：颜色集中在本文件的语义样式键里，事件处理代码不出现具体颜色。
+文案纪律（token-gate 裁定②）：只允许说"估算未超预算"，禁止声称"已保证不超模型上限"。
+
+输出路径（TASK-07 v1.12 P0-9.1 按 R9 调整）：内容流写**当前 sys.stdout**（REPL 中 =
+patch_stdout(raw=True) 代理）**缓冲不逐片 flush**；由 UI 层边界计时器周期调用
+`flush_line_boundary()`：思考整块重绘；正文部分行用 NEL＋相对定位成批落屏，
+不向正文注入换行（HM-182），提示框始终独占下一行（R9 三判据帧级成立），
+思考与正文均以 ≤0.2s 粒度可见（实时）；最终 sink 统一 CRLF（HM-183）。
+raw=True 走 write_raw，ANSI 原样到达终端由
+VT 窗口解释为颜色。**不得经 output.write()**（Vt100_Output.write 把 ESC 替换为 "?"）；
+**不得逐 delta run_in_terminal**（擦写重画互相打架）。
+
+呈现决策（通道/折叠/think toggle）在本类与其 mixin；本类是唯一呈现 sink——实验版
+（AppRenderer，`--ui app`）已随 TASK-29 KM-25 整体删除，该形态留待输入框阶段按备忘重建：
+collab/decisions/2026-09-26-ui-app-phase-backlog_hm.md。落地方式：
+- inline 主路径（HM-031/HM-034，TASK-12）：思考以**滚动窗口**显示（状态头 `▏思考中~~~`
+  + 分隔线 + 省略行 + 最近 N 行，块高恒 ≤N+3=8，见 ui/thinking_window.py）；结束即按
+  **实际块高**整块上擦——擦除有界、折叠必成（C4② 实机已证同序列可用）。旧"超屏高
+  降级 append"路径随滚动窗口废除：不再存在"因思考过长而放弃折叠"的分支。
+
+B40 职责拆分（TASK-2026-10-05-77，纯搬家不改行为）：思考折叠机制 → ui/render_thinking.py
+（RenderThinking mixin）；Run 生命周期呈现 → ui/render_lifecycle.py（RenderLifecycle）；
+工具/技能事件一行式 → 本文件模块级函数（守 V6 类红线）。
+"""
 
 from __future__ import annotations
 
@@ -33,8 +58,8 @@ _terminal_width = terminal_width   # 兼容旧导入（render_thinking / 既有�
 
 STYLE_KEYS = {
     "style.reasoning": DIM_BLUE,       # 弱化浅蓝：思考区
-    "style.content": DIM_CONTENT,
-    "style.status": DIM_STATUS,
+    "style.content": DIM_CONTENT,      # 默认前景正文（HM-181 v1.3：白色非 dim）
+    "style.status": DIM_STATUS,        # 暗灰蓝：紧随消息的提示让位（HM-177）
     "style.process": DIM_PROCESS,      # 降亮蓝：中间过程（§10）
     "style.warning": WARNING,          # 橙黄：警告
     "style.error": ERROR,              # 红：错误
@@ -57,11 +82,11 @@ def active_output_class() -> str:
         return "-"
 
 
-
+# TASK-34：incomplete 三类区分文案（撞顶/超时/其它不得混用，QD-276 两处落点之一）。
 def _incomplete_text(p: dict) -> str:
     """run.ended 的 incomplete 可行动提示（撞顶给上限值与 /continue；超时给时长口径）。"""
     reason = str(p.get("finish_reason", ""))
-
+    # HM-148（TASK-78）：任务态 Run 的 /continue 受步骤/预算/恢复门禁约束，
     # 提示不再单轨承诺 /continue，同时给 /task status 入口（run.ended 经 annotate 带 task_id）。
     cont_hint = ("输入 /continue 可继续" if not p.get("task_id")
                  else "可输入 /continue 续写，或 /task status 查看任务动作")
@@ -97,11 +122,11 @@ class Renderer(RenderLifecycle, RenderThinking):
         # patch_stdout 在 REPL 启动后才替换 sys.stdout，缓存会绕过代理直写控制台）
         self._out = out
         self._show_reasoning = show_reasoning
-
+        # TASK-12/HM-034：思考滚动窗口；TASK-116 §9：顶线+转动状态头+最近 N 行+底线，
         # 块高恒 ≤N+4（擦除有界、折叠必成不变）。
         self._thinking_window = ThinkingWindow(thinking_visible_lines)
         self._open_channel: str | None = None
-
+        # HM-185：正文部分行以 NEL＋相对定位在内容尾与提示行往返，
         # 不注入换行也不保存会随滚屏失效的绝对行；dirty 防止重复擦画提示框。
         self._content_prompt_below = False
         self._content_dirty = False
@@ -125,7 +150,7 @@ class Renderer(RenderLifecycle, RenderThinking):
         self._think_writes_since_expand = 0
         # R9（P0-6）：光标是否处于行首——提示行只在行边界重绘（帧级不动）
         self._at_line_start = True
-
+        # TASK-116 §6⑤：心情随生成流剥离（零额外付费调用）；状态行只读 MoodState。
         self._mood_parsers = {"content": MoodParser(), "reasoning": MoodParser()}
         self.mood = MoodState()
         self._ui_dirty = False           # 状态行需重绘（Run 结束/心情更新）
@@ -149,7 +174,7 @@ class Renderer(RenderLifecycle, RenderThinking):
         self._raw_write(self._styled(style_key, text), flush=flush)
 
     def _raw_write(self, text: str, *, flush: bool = False) -> None:
-        """Vastar runtime component."""
+        """最终 sink 统一 CRLF；二进制可行时绕开 TextIOWrapper 再翻译（HM-183）。"""
         out = self._stream
         normalized = text.replace("\r\n", "\n").replace("\n", "\r\n")
         if hasattr(out, "encoding") and hasattr(out, "buffer"):
@@ -160,7 +185,13 @@ class Renderer(RenderLifecycle, RenderThinking):
             out.flush()
 
     def flush_line_boundary(self) -> None:
-        """Vastar runtime component."""
+        """R9 两段式重绘：思考按节拍重绘，正文部分行用相对光标往返落屏。
+
+        思考通道打开期间每个边界节拍都整块重绘（HM-034 合批 ≤0.2s 红线；
+        TASK-116 §9 状态头转动在无语义增量时也逐帧推进）。正文通道只在有增量时
+        移到下一行重绘提示框；下个增量按记录列相对返回正文末尾，**不注入换行**
+        （HM-182），因此流式分片不会变成硬断行。其它通道仍按真实行边界落屏。
+        """
         if self._open_channel == "reasoning":
             self._rv_repaint()
             return
@@ -170,7 +201,7 @@ class Renderer(RenderLifecycle, RenderThinking):
             self._content_dirty = False
             if self._at_line_start:
                 return
-
+            # NEL 在屏幕底部会滚屏；CNL 只钳位，随后上移会覆盖正文（HM-185）。
             self._raw_write("\x1bE", flush=True)
             self._content_prompt_below = True
             return
@@ -194,7 +225,7 @@ class Renderer(RenderLifecycle, RenderThinking):
                 if pending and not pending.endswith("\n"):
                     pending += "\n"
                 # 底线必须独占一行：提示在正文下时，未满列相对回正文末；
-
+                # 满列后提示已在自然新行，直接写底线，不多移一行（HM-183 滚屏安全）。
                 prefix = ""
                 wrapped_prompt_line = False
                 if self._content_prompt_below:
@@ -248,7 +279,7 @@ class Renderer(RenderLifecycle, RenderThinking):
         # run.state_changed / usage.reported / context.compacted：不逐条刷屏（提示不冗余）
 
     def _stream_delta(self, channel: str, text: str, style_key: str) -> None:
-
+        # TASK-116 §6⑤：心情标记先从可视流剥离（畸形/残片不吞字，见 MoodParser）。
         text, moods = self._mood_parsers[channel].feed(text)
         self.mood.update(moods)
         if not text:
@@ -258,14 +289,14 @@ class Renderer(RenderLifecycle, RenderThinking):
         if self._open_channel != channel:
             self._close_open_channel()
             if channel == "reasoning":
-
+                # TASK-12/HM-034：思考不再逐片直写——只累积全文并置 dirty，
                 # 窗口块由边界计时器合批重绘（≤0.2s 可见，R2 实时性不破）。
                 self._rv_width = _terminal_width()
                 self._rv_text = ""
                 self._rv_block_lines = 0
                 self._rv_dirty = False
             else:
-
+                # TASK-116 §8：Vastar 回复块——黄色顶线 `╭─ Vastar …╮`。
                 self._content_col = 0
                 top, _ = box_rules("Vastar", BRIGHT_YELLOW)
                 self._emit(_RAW, top + "\n")    # 部分行缓冲；边界计时器成批落屏（R9）
@@ -276,7 +307,7 @@ class Renderer(RenderLifecycle, RenderThinking):
         else:
             from prompt_toolkit.utils import get_cwidth
 
-
+            # HM-182/HM-183：上一拍若已把提示框移到下一行，用相对上移＋列号
             # 回正文末尾，滚屏后不依赖 DECRC 的过期绝对行；本拍仍不伪造换行。
             width = _terminal_width()
             if self._content_prompt_below:
@@ -333,7 +364,7 @@ class Renderer(RenderLifecycle, RenderThinking):
         self._emit(_RAW, text, flush=True)
 
     def render_user_message(self, name: str, text: str) -> None:
-        """Vastar runtime component."""
+        """§8/HM-180：亮蓝框线不变；用户块正文与输入、回复正文同色。"""
         self._close_open_channel()
         top, bottom = box_rules(name, BRIGHT_BLUE)
         body = str(text)
@@ -345,7 +376,12 @@ class Renderer(RenderLifecycle, RenderThinking):
 
 
 def _render_tool_event(renderer: Renderer, event) -> None:
-    """Vastar runtime component."""
+    """工具事件一行式展示（TASK-15，Spec §8）：走 _emit 的合批路径（不另开落屏，R9 不破）。
+
+    模块级函数（Renderer 类 304/300 超红线拆出，V6）。
+    tool.ask（TASK-24）：询问提示按既定样式落屏（⚠ 行 + 数字选项行）——同样走
+    _emit 缓冲 + flush_line_boundary() 边界成批（0.15s 粒度），不抢占 `❯` 行（R9）。
+    """
     payload = event.payload
     kind = str(event.type)
     name = str(payload.get("tool", "?"))

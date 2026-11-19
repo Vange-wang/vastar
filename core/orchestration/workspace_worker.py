@@ -56,9 +56,9 @@ class WorkspaceWorker:
         from core.tools.registry import ToolsContext
         tools = ToolsContext(registry=parent.registry, project_root=root, cwd=root,
                              data_dir=self.manager.directory / key / 'data',
-                             protected_paths=(root / '.git', root / '.work', *self._map(
+                             protected_paths=(root / '.git', root / '.work', *map(Path, self._map(
                                  root, tuple(p for p in parent.protected_paths
-                                             if Path(p).resolve().is_relative_to(self.manager.root)))),
+                                             if Path(p).resolve().is_relative_to(self.manager.root))))),
                              permission_mode=parent.permission_mode,
                              timeout_seconds=parent.timeout_seconds,
                              max_calls_per_turn=parent.max_calls_per_turn,

@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""read_artifact：大输出产物续读（TASK-2026-10-02-51 / B16；权限 B 只读，走同一闸门）。
+
+模型在截断标记里拿到 artifact_ref + next_cursor → 用本工具分页续读完整内容。
+游标校验 owner/scope/hash；资源已变化/过期/损坏 → 显式失效文案（不静默返回旧内容）。
+"""
 from __future__ import annotations
 
 from core.artifacts import ArtifactError, ArtifactGone

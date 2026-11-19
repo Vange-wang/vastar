@@ -16,7 +16,7 @@ NAME = "list_dir"
 DEFAULT_DEPTH = 1
 MAX_DEPTH = 2
 DEFAULT_LIMIT = 200
-MAX_LIMIT = 200     
+MAX_LIMIT = 200     # 上限（KM-24：不再与默认值兼用同一语义）
 SKIP_DIRS = {".git", ".venv"}
 
 DESCRIPTION = "列举项目内一个目录的内容（只读；.git/.venv 跳过并计数；depth≤2、limit≤200）。"

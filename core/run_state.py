@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""Run 生命周期状态机与运行时协议数据类（基线 §3，采纳件三接口的 RunResult）。
+
+从 core/runtime.py 拆出（铁律 V6：单类 ≤300 行）。状态词汇与转换表以
+docs/ARCHITECTURE_hm.md §3 与采纳件 §3.1 为准。
+"""
 
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ class RunState:
     COMPACTING = "COMPACTING"
     REQUESTING = "REQUESTING"
     STREAMING = "STREAMING"
-    CONTINUING = "CONTINUING"    
+    CONTINUING = "CONTINUING"    # TASK-34：撞顶后自动续写中（段间态）
     RETRY_WAIT = "RETRY_WAIT"
     SWITCHING = "SWITCHING"
     CANCELLING = "CANCELLING"
@@ -45,7 +49,7 @@ _ALLOWED = {
     (RunState.REQUESTING, RunState.RETRY_WAIT), (RunState.REQUESTING, RunState.SWITCHING),
     (RunState.REQUESTING, RunState.CANCELLING), (RunState.REQUESTING, RunState.FINALIZING),
     (RunState.STREAMING, RunState.FINALIZING), (RunState.STREAMING, RunState.CANCELLING),
-    (RunState.STREAMING, RunState.CONTINUING),   
+    (RunState.STREAMING, RunState.CONTINUING),   # TASK-34：撞顶转续写
     (RunState.CONTINUING, RunState.REQUESTING),  # 续写发起新请求（同一 Run）
     (RunState.CONTINUING, RunState.FINALIZING), (RunState.CONTINUING, RunState.CANCELLING),
     (RunState.RETRY_WAIT, RunState.REQUESTING), (RunState.RETRY_WAIT, RunState.CANCELLING),
@@ -103,12 +107,12 @@ class RunRequest:
     task_id: str | None = None
     step_id: str | None = None
     strict_gate: bool = False        # True = 要求可信 token 上界（阶段一恒拒绝）
-    approved_compact: CompactSnapshot | None = None  
+    approved_compact: CompactSnapshot | None = None  # 层②输入（TASK-11：/compact 审批生效后注入）
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     event_sequencer: EventSequencer | None = None  # B03.01：一个 Run 共用的序号分配器
                                                    #（提交侧建、派发侧复用；None = 各自
                                                    # 独立计数，仅直造 factory 的场景）
-    continuation_of: str | None = None  
+    continuation_of: str | None = None  # TASK-34：/continue 手动续写（值为被续写的 run_id；
                                         # 此时 input_text 为空、不投影 user 消息，历史末尾
                                         # 的 partial 回答即续写前缀）
     explicit_skill: str | None = None   # B11：/skill 显式通道（一次性；优先级最高，D4）
@@ -137,7 +141,7 @@ class RunResult:
     model_calls: int = 0               # 本轮模型调用次数（启用工具后最多 1+链深，成本可观测）
     tool_rounds: int = 0               # 工具往返轮数（R22 兜底计数，按 Run 累计不复位）
     tool_executions: int = 0           # 本轮工具执行次数（R22：/status 成本可见）
-    continuations: int = 0             
+    continuations: int = 0             # TASK-34：本 Run 已用自动续写次数（独立预算键
                                        # llm.continuation.max_count，与 max_attempts_per_step 无关）
     usage_reports: int = 0             # B05：收到 usage 帧次数（≠ model_calls 发起数；
                                        # 0 且发起数 > 0 → 用量 unknown，禁当 0）
@@ -178,7 +182,7 @@ class SharedState:
     terminal_delivery_done: bool = False  # A30: one evidence/unfinished-work delivery.
     pending_terminal_text: str = ''  # Safe terminal body buffered before a real interruption.
     terminal_tool_receipts: list[str] = field(default_factory=list)  # This Run's committed groups only.
-    degraded_to: str | None = None  
+    degraded_to: str | None = None  # 降级落点 "provider/model"（结束行显式提示，裁定 §二.4）
     tool_rounds: int = 0            # 工具往返轮数（R22：兜底计数，按 Run 累计不复位）
     read_only_rounds: int = 0       # TASK96: consecutive rounds without non-read tool work.
     tool_exec_count: int = 0        # 工具执行次数（R22：/status 成本可见）

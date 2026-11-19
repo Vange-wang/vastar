@@ -11,7 +11,7 @@ class RenderLifecycle:
         self._last_provider = provider
         self._close_open_channel()
         if p.get("kind") == "continuation":
-
+            # TASK-34：撞顶自动续写明示（可行动提示；内容块由通道开合自然分界）
             limit = (p.get("request_params") or {}).get("max_tokens", "?")
             self._emit("style.warning",
                        f"⚠ 已达单次输出上限（max_tokens={limit}），"
@@ -48,13 +48,13 @@ class RenderLifecycle:
         elif status == "cancelled":
             head = self._styled("style.warning", "[已取消]")
         elif status == "incomplete":
-
+            # TASK-34：撞顶/超时/其它三类文案区分，撞顶与超时给可行动提示（/continue）
             head = self._styled("style.warning", _incomplete_text(p))
         else:
             head = self._styled("style.error", f"[失败] {p.get('finish_reason', '')}")
         suffix = ""
         if degraded:
-
+            # 裁定（model-switch-and-banner §二.4）："平时不显示备用" ≠ "降级时不说"
             fallback_label = p.get("degraded_to") or "备用模型"
             suffix = f" · 已降级 → 备用 {fallback_label}"
         explanation = run_usage(usage, p.get('call_records') or [], p.get('model_calls', 0))

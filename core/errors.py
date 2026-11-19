@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""统一错误码与错误分类（确定性代码，不使用 LLM 判断）。
+
+失败分类依据采纳件 §7 失败矩阵：
+collab/decisions/2026-09-20-vastar-agent-orchestration-decisions_gpt.md。
+"""
 
 from __future__ import annotations
 
@@ -10,10 +14,10 @@ class ErrorCode:
     INPUT_BUDGET_EXCEEDED = "INPUT_BUDGET_EXCEEDED"   # B06：工具请求超输入预算（显式拦截、请求不发出）
     TOKEN_GUARANTEE_UNAVAILABLE = "TOKEN_GUARANTEE_UNAVAILABLE"
     CAPABILITY_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
-    TOOL_REJECTED = "TOOL_REJECTED"              
-    TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"   
+    TOOL_REJECTED = "TOOL_REJECTED"              # TASK-15：链深度/参数/未启用等显式拒绝
+    TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"   # TASK-15：工具实现失败（禁静默）
     PROTOCOL_PARSE_FAILED = "PROTOCOL_PARSE_FAILED"
-    UNPARSED_TOOL_CALL = "UNPARSED_TOOL_CALL"    
+    UNPARSED_TOOL_CALL = "UNPARSED_TOOL_CALL"    # TASK-83: diagnostic-only raw tool markup
     NO_FINAL_CONTENT = "NO_FINAL_CONTENT"
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
     STORE_WRITE_FAILED = "STORE_WRITE_FAILED"

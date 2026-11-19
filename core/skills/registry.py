@@ -1,4 +1,10 @@
-"""Vastar runtime component."""
+"""Skill 发现与校验（skills-decisions v1.2 D1/D2/D9；TASK-2026-10-02-46）。
+
+启动时扫描 skills/<name>/SKILL.md（递归一层 = 每个一级子目录一件）。
+校验失败 = 显式不可用（SkillFault 记录原因 + 日志显式报错）——禁静默跳过、
+禁降级成半个技能（D2）。required_tools 必须"存在且已启用"且只读（D2/D7：
+权限 B = 只读工具；技能不能比会话本身更能干）。
+"""
 
 from __future__ import annotations
 

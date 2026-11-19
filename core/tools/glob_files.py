@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""glob_files：按文件名模式查找（TASK-24 读增强组；R25）。只读。
+
+支持 `**/*.py` 等递归模式；结果上限默认 100（上限 500）；.git/.venv 与受保护路径
+跳过并计数（禁静默）。权限判定不在本文件（执行层收口，机械 grep 门）。
+"""
 
 from __future__ import annotations
 

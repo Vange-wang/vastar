@@ -1,4 +1,7 @@
-"""Vastar runtime component."""
+"""prompt 版本化装载（core/prompt.py，采纳件 §10.1）。
+
+PromptBundle 携带原文与版本哈希，供上下文快照与回放使用。
+"""
 
 from __future__ import annotations
 
@@ -40,7 +43,9 @@ _COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 
 
 def strip_comments(text: str) -> str:
-    """Vastar runtime component."""
+    """剥离 HTML 注释（TASK-20 / ISSUE-HM-042）：头部元数据是给人/工具看的，
+    **不得进入模型上下文**（实录中模型曾引用 `owner: zcode(_zc)` 做"自我介绍"）。
+    占位判断与装载共用本剥离，保证行为一致。"""
     return _COMMENT_RE.sub("", text)
 
 
@@ -50,7 +55,11 @@ def _is_placeholder(text: str) -> bool:
 
 
 def build_prompt(prompt_cfg: dict, base_dir: Path) -> PromptBundle:
-    """Vastar runtime component."""
+    """按 config/settings.json 的 prompt 块装载提示词（只读，不做模板替换）。
+
+    装载时剥离 HTML 注释（头部元数据不进上下文，TASK-20）；files 哈希对剥离后
+    文本计算（即"实际参与装配的内容"）。
+    """
     dir_path = base_dir / prompt_cfg.get("dir", "prompts/")
     files: dict[str, str] = {}
     texts: dict[str, str] = {}
@@ -58,7 +67,7 @@ def build_prompt(prompt_cfg: dict, base_dir: Path) -> PromptBundle:
         name = prompt_cfg.get(key, f"{key}.md")
         path = dir_path / name
         if not path.exists():
-            
+            # KM-18：缺失静默置空串会让空 system 提示进装配且全程无报错——显式失败。
             raise VastarError(
                 code=ErrorCode.PARAM_ERROR, category=ErrorCategory.PARAM,
                 message=(f"prompt 缺失：{path}（{key} 件必须存在；"

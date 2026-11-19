@@ -18,7 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from core.ownership import Ownership
+from core.ownership import HEARTBEAT_TTL, Ownership
 from memory.connection import open_connection
 from memory.event_store import EventStoreMixin
 from memory.migrations.schema import MEMORY_REVISIONS_DDL, SCHEMA_VERSION
@@ -44,7 +44,8 @@ class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepositor
 
     def __init__(self, path: str | Path, *,
                  now: Callable[[], str] | None = None,
-                 require_existing: bool = False) -> None:
+                 require_existing: bool = False,
+                 ownership_heartbeat_ttl: float = HEARTBEAT_TTL) -> None:
         self._path = Path(path).resolve()
         self._conn = None
         self._owner = None
@@ -52,12 +53,14 @@ class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepositor
         self._now = now or _now
         if not require_existing:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-
+        # KM-10：单连接 + check_same_thread=False 下，读与写共用同一把锁（RLock——
         # 备份/收尾路径存在同线程再入）。必要性：WAL 只保证存储层并发，不防单连接上
         # 读写游标交错的 'recursive use of cursors'/'database error' 类错乱；
-
+        # 防后人当冗余'优化'掉（任务单 KM-10 明令写明）。
         self._lock = threading.RLock()
-        self._owner = Ownership(self._path).acquire()
+        owner_options = {} if ownership_heartbeat_ttl == HEARTBEAT_TTL else {
+            "heartbeat_ttl": ownership_heartbeat_ttl}
+        self._owner = Ownership(self._path, **owner_options).acquire()
         try:
             self._conn = open_connection(self._path, self._now, require_existing=require_existing)
             from memory.forget_journal import replay
@@ -95,7 +98,7 @@ class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepositor
             )
 
     def latest_session(self) -> str | None:
-        with self._lock:
+        with self._lock:   # KM-10：读路径与写路径同锁（必要性见 _lock 定义处注释）
             row = self._conn.execute(
                 "SELECT session_id FROM sessions ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
@@ -153,7 +156,7 @@ class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepositor
                 (snapshot_id, run_id, json.dumps(record, ensure_ascii=False), self._now()),
             )
 
-
+    # ---- /compact 压缩快照（TASK-11：复用本表；run_id 空串 = compact 行判别）-------
 
     def save_compact_snapshot(self, snapshot_id: str, session_id: str, record: dict) -> None:
         """压缩快照落库（kind=compact_summary；生命周期字段在 record 内：pending /
@@ -167,7 +170,7 @@ class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepositor
             )
 
     def compact_snapshot_rows(self, session_id: str) -> list[dict]:
-        with self._lock:
+        with self._lock:   # KM-10：读路径与写路径同锁（必要性见 _lock 定义处注释）
             rows = self._conn.execute(
                 "SELECT snapshot_id, record_json FROM context_snapshots"
                 " WHERE run_id='' ORDER BY rowid DESC").fetchall()
@@ -182,14 +185,18 @@ class Store(SessionRepository, EventStoreMixin, RunRepository, ArtifactRepositor
     def latest_compact_snapshot(self, session_id: str,
                                  *, status: str | None = None) -> dict | None:
         """最新一条压缩快照（可按 status 过滤；无则 None）。"""
-        with self._lock:
+        with self._lock:   # KM-10：读路径与写路径同锁（必要性见 _lock 定义处注释）
             for row in self.compact_snapshot_rows(session_id):
                 if status is None or row.get("status") == status:
                     return row
         return None
 
     def update_compact_snapshot_status(self, snapshot_id: str, status: str) -> bool:
-        """Vastar runtime component."""
+        """审批闭环的状态迁移（读-改-写 record_json）。
+
+        返回 True=迁移完成；**False=目标行不存在（KM-12：显式信号，禁静默）**——
+        正常流由调用方先查后改（_transition_snapshot），False 属竞态防御，留运行日志。
+        """
         with self.transaction():
             row = self._conn.execute(
                 "SELECT record_json FROM context_snapshots WHERE snapshot_id=? AND run_id=''",

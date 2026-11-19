@@ -1,4 +1,7 @@
-"""Vastar runtime component."""
+"""mkdir：创建目录（TASK-24 写操作组；R25）。幂等——已存在明确回显"已存在"。
+
+权限判定不在本文件（执行层收口，机械 grep 门）；本文件只提供 OpPlan 事实。
+"""
 
 from __future__ import annotations
 

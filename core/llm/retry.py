@@ -1,4 +1,16 @@
-"""Vastar runtime component."""
+"""确定性重试/切备策略（core/llm/retry.py，采纳件 §7）。
+
+总裁定：主 provider 首次请求 → 最多 2 次同 provider 重试 → 最多 1 次备用请求 → 明确失败。
+最多 4 次尝试，不是必须用完。**一旦收到任何有效思考或正文增量，就不再自动重试或切备**
+（调用方保证：has_content=True 时不得调用本策略）。
+
+分类规则（失败矩阵）：
+- AUTH：不重试相同凭据；备用 provider 已在配置中授权 → 可切备一次；
+- PARAM：立即失败，不通过盲目切备掩盖参数缺陷；
+- RATE_LIMITED：尊重等待预算（retry_wait_budget_s），超预算则切备或失败；
+- TRANSIENT / TIMEOUT / PROTOCOL（无内容时）：同 provider 有限重试后切备；
+- CANCELLED / INTERNAL：永不重试。
+"""
 
 from __future__ import annotations
 
@@ -30,7 +42,7 @@ class RetryDecision:
 
 
 MAX_RETRIES_SAME_PROVIDER = 2   # 首次 + 2 重试 = 同 provider 最多 3 次
-MAX_TOTAL_ATTEMPTS = 4   
+MAX_TOTAL_ATTEMPTS = 4   # 总尝试次数（含切备）硬上限（KM-22；runtime 同源引用）
 
 
 class RetryPolicy:

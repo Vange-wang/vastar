@@ -1,4 +1,10 @@
-"""Vastar runtime component."""
+"""AttemptRunner：单次尝试执行、流发起与 Run 收尾（从 core/runtime.py 拆出，铁律 V6）。
+
+职责边界（采纳件 §2.2）：发起请求（stream_attempt）→ 结束分类（finish /
+tool_calls / 无内容）；终态收尾与 run.ended 事件。流消费内核（竞速/逐帧归一化/
+usage 记账）在 core/stream_consume.py（TASK-42/B07 交付项 0 拆出）。
+不自行决定重试（决策在 ReActRuntime._attempt_loop + RetryPolicy）。
+"""
 
 from __future__ import annotations
 
@@ -32,9 +38,9 @@ class AttemptRunner:
                  continuation=None) -> None:
         self._prepare = prepare_context_fn  # (RunRequest, ProviderSpec) -> ContextResult
         self._tools = tools                 # None = 工具能力关闭（default-closed，行为同阶段一）
-        
+        # TASK-34：撞顶自动续写（core/continuation.py；None = 关闭，行为与此前版本一致）
         self._continuation = continuation
-        
+        # TASK-42/B07 交付项 0：流消费内核拆至 core/stream_consume.py（V6）
         self._consumer = StreamConsumer()
         # 回合内工具往返（方案 A）拆至 core/tools/round_trip.py（V6）；竞速逻辑注入复用
         self._round_tripper = (
@@ -49,10 +55,12 @@ class AttemptRunner:
         正文/思考/工具片段留在 outcome 内，由 _attempt_loop 按分类裁决保留或重试）；
         取消触发时 err.category=CANCELLED。"""
         request = s.request
+        from core.harness.task_draft import is_draft_request
+        draft_only = is_draft_request(request)
         # B07：新 attempt 重建自己的工具证据（防重试/切备后沿用上一 attempt 的旧组）
         s.committed_messages = None
         tools_schema = None
-        if self._tools is not None and self._tools.registry.enabled:
+        if self._tools is not None and self._tools.registry.enabled and not draft_only:
             tools_schema = self._tools.registry.to_openai_tools()
         llm_request = LLMRequest(
             provider=spec.name, model=spec.model,
@@ -66,8 +74,8 @@ class AttemptRunner:
         if err is not None:
             return outcome, err
         if (outcome.tool_calls and self._tools is not None
-                and self._tools.registry.enabled):
-            
+                and self._tools.registry.enabled and not draft_only):
+            # 方案 A（Spec §10 / QD-072）：回合内工具往返封在本 attempt 内；不动 _attempt_loop。
             # enabled 为空（default-closed）不走往返 → 交给 classify_stream_end 拒绝（DoD 1 总闸）。
             try:
                 outcome = await self._round_tripper.run(
@@ -80,7 +88,11 @@ class AttemptRunner:
                              llm_request: LLMRequest, attempt_id: str, attempt_index: int,
                              outcome: AttemptOutcome,
                              extra_payload: dict | None = None) -> VastarError | None:
-        """Vastar runtime component."""
+        """发请求并消费流（attempt_once 与撞顶续写共用内核，TASK-34 拆出）。
+
+        返回 None = 流自然结束；VastarError = 失败（取消时 category=CANCELLED）。
+        只含"登记 attempt → 发事件 → 竞速消费"；上下文装配与工具往返在调用方。
+        """
         s.result.attempt_ids.append(attempt_id)
         _latency(s.latencies, "submit_to_request_sent", s.request.submitted_mono_ns)
         payload = {
@@ -92,7 +104,7 @@ class AttemptRunner:
             "attempt_index": attempt_index,
         }
         if extra_payload:
-            payload.update(extra_payload)   
+            payload.update(extra_payload)   # 续写标注：kind/continuation_index/max（TASK-34）
         await s.emit(s.factory.build(EventType.ATTEMPT_STARTED, payload,
                                      attempt_id=attempt_id, request_epoch=attempt_index))
         await s.sm.transition(RunState.REQUESTING, "request_sent")
@@ -112,8 +124,8 @@ class AttemptRunner:
     async def classify_stream_end(self, s: SharedState, outcome: AttemptOutcome,
                                    spec: ProviderSpec, ctx_result: ContextResult) -> bool:
         """流自然结束后的终局分类。返回 True 表示已达终态。"""
-        
-        
+        # 设计内防护（TASK-11 P0-2 标注，不得删除）：阶段一工具数为 0（config
+        # tools.enabled=[]），铁律要求"拒绝执行 + 零次工具执行"；工具执行随后续阶段裁定。
         if outcome.tool_calls:
             err = VastarError(
                 code=ErrorCode.CAPABILITY_UNAVAILABLE, category=ErrorCategory.PROTOCOL,
@@ -123,6 +135,9 @@ class AttemptRunner:
             await self.terminate(s, RunState.FAILED, ErrorCode.CAPABILITY_UNAVAILABLE)
             return True
         finish = outcome.finish_reason
+        from core.empty_content import recover_empty
+        if await recover_empty(s, spec, outcome, ctx_result, self, self._continuation):
+            return True
         if finish == "needs_input":
             await self.terminate(s, RunState.INCOMPLETE, "needs_input")
             return True
@@ -133,7 +148,7 @@ class AttemptRunner:
             await self.terminate(s, RunState.INCOMPLETE, "input_budget_exceeded")
             return True
         if finish == "length":
-            
+            # TASK-34：撞顶且续写启用 → 自动续写（core/continuation.py；硬上限 Y=2、
             # 共享 run_total_s 预算、闸门复查；预算用尽/闸门拦截/失败 → 落 INCOMPLETE）
             if self._continuation is not None and self._continuation.accepts(outcome):
                 return await self._continuation.resume(s, spec, outcome, ctx_result, self)
@@ -156,7 +171,7 @@ class AttemptRunner:
     async def record_error(self, s: SharedState, err: VastarError, attempt_id: str) -> None:
         s.errors.append(err.to_dict())
         s.result.errors = s.errors
-        
+        # HM-152（TASK-82）：attempt_id 进信封——projector 按键把错误挂到 attempt
         # （error_json 落库）；payload 键保留兼容。空串 = Run 级错误，不落具体 attempt。
         await s.emit(s.factory.build(EventType.ERROR, {
             **err.to_dict(), "attempt_id": attempt_id, "next_action": "decide_retry",
@@ -209,7 +224,7 @@ class AttemptRunner:
         s.result.errors = s.errors
         with contextlib.suppress(Exception):
             await s.emit(s.factory.build(EventType.ERROR, err.to_dict()))
-            
+            # TASK-34：有已输出内容（含续写段）时超时 = INCOMPLETE 如实标注（任务单 v1.8
             # :38 口径）——partial 旗标只在 classify 路径置位，流中超时够不到，
             # 故按 frames_by_attempt 里是否有真实正文判定。
             from core.runtime_delivery import evidence
@@ -240,7 +255,7 @@ class AttemptRunner:
 
 
 def _run_ended_payload(s: SharedState) -> dict:
-    """Vastar runtime component."""
+    """run.ended 载荷组装（模块级——AttemptRunner 守 V6 类红线拆出，TASK-34）。"""
     # 终态快照就是投影事实；不能等 runtime.run 返回后才补这些计数。
     s.result.model_calls = s.model_calls
     s.result.tool_rounds = s.tool_rounds
@@ -263,7 +278,7 @@ def _run_ended_payload(s: SharedState) -> dict:
         "context_snapshot": s.result.context_record,
         "frames_by_attempt": s.frames_by_attempt,
         "latencies": s.latencies,
-        
+        # TASK-34：撞顶/续写可观测（界面文案与审计共用）
         "continuations": s.result.continuations,
         # B05：费用口径——发起请求数（model_calls）与 usage 到达数（usage_reports）分列；
         # usage_reports == 0 且 model_calls > 0 → 结束行标 token unknown（禁写 0）

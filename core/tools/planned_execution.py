@@ -20,7 +20,7 @@ async def execute_planned(executor, spec: ToolSpec, args: dict, resolved: Path,
                            started: int, args_sum: str, ask_emitter, *,
                            session_id: str = "", request_id: str = "", control=None) -> ToolOutcome:
     # 已解析路径先行否决（plan 之前）：主路径与附加路径（dest）上**不存在**的
-    
+    # 硬拒目标也必须 DENY 而非 failed（QD-113 硬拒优先，兜底设施不可探测）
     for early_target in [resolved, *resolved_extra.values()]:
         early_deny = permissions.hard_deny_reason(
             early_target, executor._ctx.project_root, executor._ctx.protected_paths)
@@ -112,7 +112,11 @@ async def _backup_and_audit(executor, spec, plan, decision, resolved, args_sum,
 
 def _post_plan_guard(spec, all_targets, resolved, plan, project_root, args_sum, started,
                      protected_paths=()):
-    """Vastar runtime component."""
+    """plan 后闸门：全集硬拒一票否决（QD-113）→ TOCTOU 指纹快照 → 目录影响面扫描事实。
+
+    返回 (denied_outcome | None, toctou_fp, impact)。影响面扫描只报「已检出」事实进审计，
+    放行/拒绝判定仍由硬拒清单收口（扫描本身不做判定，R20/R25 口径不动）。
+    """
     for target in all_targets:   # 受影响全集任一命中（如目录内嵌硬拒项）→ 整批 DENY
         deny = permissions.hard_deny_reason(target, project_root, protected_paths)
         if deny is not None:

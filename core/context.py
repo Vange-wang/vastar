@@ -1,4 +1,11 @@
-"""Vastar runtime component."""
+"""上下文装配（ContextAssembler）与 ContextSnapshot（采纳件三接口之一）。
+
+分层压缩口径（基线 §4，禁静默截断，铁律 V2）：
+① 同一来源对象无损去重 → ② 应用已批准压缩快照（/compact 审批生效后，TASK-11 接入）
+→ ③ 用户显式 /compact（生成摘要快照 → 审批 → 可回滚；摘要本地确定性拼装，零模型请求）
+→ ④ 仍超限则显式失败 CONTEXT_BUDGET_EXCEEDED，并说明"未执行：静默删历史/截短原文/降低输出预留"。
+禁止在普通回答前自动插入摘要请求；/compact 只在用户显式敲命令时发生（summarize_on_overflow=false）。
+"""
 
 from __future__ import annotations
 
@@ -78,7 +85,11 @@ class ContextResult:
 
 @dataclass
 class CompactSnapshot:
-    """Vastar runtime component."""
+    """已批准的 /compact 压缩快照（层②输入，TASK-11）。
+
+    原始消息不删除——快照是"可回滚的投影"：covered_message_ids 内的原文在装配时被
+    digest_text 替换，快照退出 approved 态（回滚/丢弃）即恢复原文参与装配。
+    """
 
     snapshot_id: str
     digest_text: str
@@ -129,8 +140,8 @@ def _dedup_by_source_id(messages: list[SourceMessage]) -> list[SourceMessage]:
     return out
 
 
-MIN_DIGEST_CAP = 12          
-DIGEST_HEADROOM_CHARS = 8    
+MIN_DIGEST_CAP = 12          # 摘要容量下限（KM-22）
+DIGEST_HEADROOM_CHARS = 8    # 摘要容量预留字符（KM-22）
 
 
 def _render_digest(history: list[SourceMessage], cap: int) -> str:
@@ -143,7 +154,7 @@ def _render_digest(history: list[SourceMessage], cap: int) -> str:
         if len(content) <= cap:
             excerpt = content
         else:
-            
+            # KM-20：截断显式计数（准 V2：截掉多少必须可见，禁只加省略号）
             excerpt = content[:cap] + f"…[截断 {len(content) - cap} 字]"
         lines.append(f"- {who}: {excerpt}" if excerpt else f"- {who}:（空）")
     return "\n".join(lines)
@@ -151,7 +162,12 @@ def _render_digest(history: list[SourceMessage], cap: int) -> str:
 
 def build_compact_digest(history: list[SourceMessage], *,
                          target_ratio: float) -> CompactDigest:
-    """Vastar runtime component."""
+    """③层落地（TASK-11）：把当前历史拼装为摘要（本地确定性生成，零模型请求）。
+
+    方案口径（任务单 §④ 方案自解）：逐条摘录而非改写——摘要内容全部来自原文、
+    可逐条对照审计；摘录长度以 target_ratio 为目标做一轮估算收敛，实测占比如实上报
+    （不强凑比例）。被覆盖原文完整保留在库，回滚即恢复参与装配。
+    """
     texts = [m.content for m in history]
     tokens_before = measure(texts).estimated_tokens
     total_chars = sum(len(t) for t in texts)
@@ -211,7 +227,7 @@ def _project_messages(system_text: str, messages: list[SourceMessage],
         source_hashes.append(
             hashlib.sha256(current_input.encode("utf-8")).hexdigest()
         )
-    
+    # TASK-34：current_input 为空 = /continue 手动续写——不投影空 user 消息，
     # 历史末尾的 partial 回答（assistant）即续写前缀。
     return projection, source_ids, source_hashes
 
@@ -229,7 +245,17 @@ def prepare_context(
     tool_schema_text: str | None = None,
     capability_note: str | None = None,
 ) -> ContextResult:
-    """Vastar runtime component."""
+    """装配本次请求的上下文投影并过闸门。超限抛 VastarError(CONTEXT_BUDGET_EXCEEDED)。
+
+    阶段一历史全部原文参与计量，装不下就显式失败（有生效快照时层②先行把被覆盖
+    原文替换为摘要，见 _apply_compact_layer）；agent.recent_raw_turns 仅是配置基线的
+    保留目标记录，本函数无此参数、不据此删历史（原 docstring 误述为参数——KM-21 修正）。
+    tool_schema_text 启用工具时非空：工具清单计入 token 预算（Spec §7，超限显式报错）。
+    capability_note：按启用清单注入的"有无工具/能做啥"能力说明（R21/V1 一致性），
+    追加在 system 文本之后——提示与实际能力不得矛盾。
+    B16 交付项 0：片段选择/预算分配拆至 core/context_segments.py（select_and_gate，
+    含「大输出引用折叠」显式层）；本函数只做 层①② → system 拼装 → 选择/闸门 → 投影 → 快照。
+    """
     deduped = _dedup_by_source_id(history)
     messages, layers_executed, layers_not_executed = _apply_compact_layer(
         deduped, approved_compact)

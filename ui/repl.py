@@ -1,4 +1,23 @@
-"""Vastar runtime component."""
+"""行式 REPL（ui/repl.py —— **主路径**（正式使用与常规验收）；TUI 路线 A inline）。
+全屏/输入框实验代码已整体删除（TASK-29 KM-25）；该形态留待输入框阶段按备忘重建：
+collab/decisions/2026-09-26-ui-app-phase-backlog_hm.md。
+
+按键（Windows）：
+- Enter = 提交；Ctrl+Enter（c-j）= 换行；
+- Ctrl+C 五语境（P0-1 接线，QD-011 口径）：
+  ① /model 模式内 → 回退模式（不清草稿、不弹 /exit 提示；不武装强退计时）；
+  ② 生成中 → 取消当前 Run（键路径直接 request_cancel，HM-023）；
+    ③ 空闲有草稿 → 清草稿；④ 空闲无草稿 → 提示 /exit；
+  ⑤ 非模式语境下 **2.0s 内第二次 Ctrl+C → 强制退出**（窗口与适用语境见 _on_ctrl_c）。
+- Ctrl+D（空缓冲且空闲）= 退出。
+
+运行环境纪律：本模块用 prompt_toolkit Win32Output，只能在 Windows Terminal / cmd 运行，
+禁 git-bash/MSYS（会抛 NoConsoleScreenBufferError）。
+
+B40 职责拆分（TASK-2026-10-05-77，纯搬家不改行为）：按键语义（Ctrl+C 五语境/强退）
+→ ui/repl_keys.py（ReplKeys mixin）；/status 组装 → ui/status_view.py；
+/compact·/continue·/skill 分派助手 → ui/repl_commands.py。
+"""
 
 from __future__ import annotations
 
@@ -25,7 +44,7 @@ from ui.theme import (
 )
 from ui.welcome import DEFAULT_USER_NAME, sanitize_user_name, write_user_name
 
-LINE_BOUNDARY_TICK_S = 0.15
+LINE_BOUNDARY_TICK_S = 0.15   # R9 边界计时器粒度（≤0.2s 红线；KM-22）
 
 _COMMANDS = ("/sessions", "/resume", "/help", "/exit", "/new", "/model", "/think", "/mode", "/status", "/steer",
              "/retry", "/compact", "/continue", "/skill", "/task", "/team", "/trace", "/history", "/remember", "/memory")
@@ -54,9 +73,9 @@ class ReplUI(ReplCommands, ReplKeys):
         self._coordinator = coordinator
         self._renderer = renderer
         self._tool_registry = tool_registry   # None = 工具能力关闭（/status 照实显示）
-        self._ask_gate = ask_gate
+        self._ask_gate = ask_gate             # TASK-24：pending 询问的输入路由（复用本输入会话）
         self._permission_mode = permission_mode   # /status 展示（ask/auto）
-
+        # TASK-116：§8 称呼（UI 显示名称配置 + 首次问一次）；§2 预检信息留 /status
         self._user_name = user_name
         self._config_path = config_path
         self._startup_facts = startup_facts
@@ -69,7 +88,7 @@ class ReplUI(ReplCommands, ReplKeys):
         self._last_ctrl_c = 0.0    # ⑤ 强退窗口计时（monotonic；模式内按键不武装）
         self._ctrl_c_announced = False  # ④ 提示只说一次，避免连按刷屏
         self._gen_note_shown = False    # R1 v1.1：生成中状态行每次 Run 只提示一次
-
+        # ISSUE-HM-031/HM-034（TASK-12）：思考折叠 = 滚动窗口（状态头+最近 N 行，
         # 块高恒 ≤N+3=8）+ 结束按实际块高整块上擦——擦除有界、折叠必成，erase 为
         # 唯一路径（旧 append 超屏高降级已废除）；窗口逻辑见 ui/thinking_window.py。
 
@@ -80,13 +99,16 @@ class ReplUI(ReplCommands, ReplKeys):
 
     async def run(self) -> None:
         # P0-9.3 兜底：真控制台 Ctrl+C 以 SIGINT 到达（prompt_toolkit 键路径之外）时，
-
+        # 语义仍 = 取消当前 Run（不抛 KeyboardInterrupt 打断主循环；signal 顶部导入，KM-24）。
         def _sigint_handler(signum, frame):  # noqa: ANN001
+            from ui.team_entry import cancel_team
+            if cancel_team(self._coordinator):
+                return
             from ui.session_commands import cancel_replay
             if cancel_replay(self):
                 return
             if self._ask_gate is not None and self._ask_gate.cancel():
-                return
+                return   # 询问态 SIGINT = 拒绝该次工具确认（QD-115），Run 继续
             if self._coordinator.has_active_or_pending():
                 self._coordinator.request_cancel()
 
@@ -97,12 +119,12 @@ class ReplUI(ReplCommands, ReplKeys):
         self._session = PromptSession(
             multiline=True, key_bindings=self._build_bindings(),
             message=self._prompt_message,
-            erase_when_done=True,
-            style=Style.from_dict({"": PROMPT_CONTENT_STYLE}),
+            erase_when_done=True,  # HM-179：提交后擦除旧输入容器，历史只留消息块
+            style=Style.from_dict({"": PROMPT_CONTENT_STYLE}),  # HM-180：输入正文同色
             input=self._injected_input, output=self._injected_output,
         )
         self._inline_bottom_rule()
-
+        # P0-A（TASK-03）：raw=True。raw 控制代理走 output.write 还是 write_raw——
         # raw=False 会经 Vt100_Output.write 把 ESC 字面替换为 "?"（颜色全毁，
         # 即 `?[38;5;75m` 乱码根因）；raw=True 使 ANSI 原样经 write_raw 到达终端，
         # 由 Windows10_Output.flush 的 VT 窗口解释为颜色。提示框安全由代理的
@@ -118,12 +140,15 @@ class ReplUI(ReplCommands, ReplKeys):
             ticker.cancel()
 
     async def _line_boundary_ticker(self) -> None:
-        """Vastar runtime component."""
+        """R9 两段式重绘的边界计时器：思考按节拍重绘；正文部分行以
+        光标保存/恢复成批落屏（HM-182，不向正文注入硬换行），使 `❯` 提示行
+        独占下一行、横向不动、纵向随内容行数。生成中思考/正文以 ≤0.2s
+        粒度成批出现（实时）；无正文增量时为空操作。"""
         try:
             while True:
                 await asyncio.sleep(LINE_BOUNDARY_TICK_S)
                 self._renderer.flush_line_boundary()
-
+                # TASK-116 §4/§6：状态行与长线随终端实时重绘——生成中每拍推进
                 # 时间栏动画；空闲时仅在 Run 结束/心情更新时重绘（不空刷）。
                 dirty = self._renderer.consume_ui_dirty()
                 if self._session is not None and (
@@ -137,7 +162,7 @@ class ReplUI(ReplCommands, ReplKeys):
         可继续输入（提交即排队，回到基线 §3 默认排队语义）；生成中 Ctrl+C 经
         c-c 键绑定取消当前 Run（语境②）。流式文本按行边界落屏（Renderer 依赖
         代理的换行缓冲），提示行不被部分行拽动。"""
-
+        # TASK-116 §2：Output 诊断挪入 /status（启动页不再显示）；§8：首次先问称呼。
         if self._user_name is None and self._config_path:
             await self._ask_user_name_once()
         while not self._exit_requested:
@@ -162,7 +187,7 @@ class ReplUI(ReplCommands, ReplKeys):
                 await self._handle_command(text)
                 continue
             if self._ask_gate is not None:
-
+                # TASK-24（QD-129）：询问 pending 期间输入复用本输入会话——1/2/3 路由
                 # 到 AskGate；非法输入提示重答（问题保持 pending，超时仍生效）。
                 state = self._ask_gate.resolve_input(text)
                 if state == "answered":
@@ -179,6 +204,17 @@ class ReplUI(ReplCommands, ReplKeys):
                 await self._handle_command(text)
                 if self._exit_requested:
                     break
+                continue
+            from core.harness.task_entry import natural_task_entry
+            try:
+                task_note = await natural_task_entry(self._coordinator, text)
+            except (ValueError, OSError) as exc:
+                self._renderer.render_note(f"Task：{exc}")
+                continue
+            if task_note is not None:
+                self._renderer.render_user_message(self._user_name or DEFAULT_USER_NAME, text)
+                self._renderer.render_note(task_note)
+                self._announce_generation()
                 continue
             receipt = await self._coordinator.submit(text)
             self._renderer.render_user_message(self._user_name or DEFAULT_USER_NAME, text)
@@ -205,7 +241,7 @@ class ReplUI(ReplCommands, ReplKeys):
             self._renderer.render_note(f"请输入 1~{total}，Ctrl+C 回退")
 
     def _inline_bottom_rule(self) -> None:
-        """Vastar runtime component."""
+        """HM-176：用固定一行 Window 夹住输入行，不再注册或搬移 bottom_toolbar。"""
         root = self._session.layout.container
         main_input = root.children[0].alternative_content
         bottom_rule = Window(
@@ -243,6 +279,6 @@ class ReplUI(ReplCommands, ReplKeys):
         except (OSError, ValueError) as exc:
             self._renderer.render_note(f"称呼写回 config 失败（{exc}）；本次会话暂用 {name}")
         else:
-            self._renderer.render_note(f"已记住称呼 {name}（config ui.user_name）")
+            self._renderer.render_note(f"已记住称呼 {name}（UI 显示名称配置）")
         self._user_name = name
 

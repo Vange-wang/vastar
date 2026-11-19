@@ -1,4 +1,4 @@
-"""Vastar runtime component."""
+"""TASK-93: installation baseline enables the entry, never automatic credit."""
 import math
 from dataclasses import dataclass
 

@@ -1,4 +1,14 @@
-"""Vastar runtime component."""
+"""token 计量与预算闸门（裁定②，Vange 2026-09-20 选②）。
+
+口径（collab/decisions/2026-09-20-token-gate-ruling_hm.md）：
+- 阶段一只有启发式估算，定位 = 预警，不是硬上界证明；
+- 计量返回值必须携带 guarantee ∈ {estimated, bounded, exact}；
+- 任何要求可信上界的路径（strict=True）在只有估算时返回 TOKEN_GUARANTEE_UNAVAILABLE 并拒绝调用；
+- 禁止任何输出/日志/UI 文案声称"已保证不超模型上限"，只能说"估算未超预算"。
+
+预算公式（采纳件 §5.1）：B = min(产品输入上限, provider 窗口 − 本次输出预留)；
+闸门计量 G = ceil(估算 × (1 + safety_margin_ratio))；允许调用 ⇔ G ≤ B。
+"""
 
 from __future__ import annotations
 
@@ -14,7 +24,7 @@ GUARANTEE_EXACT = "exact"
 TOKENIZER_VERSION = "heuristic_cjk_v1"
 PROVIDER_CONTRACT_VERSION = "openai-compat-stream-v1"
 
-OTHER_CHARS_PER_TOKEN = 3.5   
+OTHER_CHARS_PER_TOKEN = 3.5   # heuristic_cjk_v1：非 CJK 每 token 折算字符数（KM-22）
 _CJK_RANGES = (
     (0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0x20000, 0x2A6DF),
     (0xF900, 0xFAFF), (0x3000, 0x303F), (0xFF00, 0xFFEF),

@@ -31,6 +31,10 @@ async def dispatch(context, spec, args, *, args_summary, session_id, request_id,
             return denied
     if name in {"update_task_plan", "ask_task_question", "validate_task_step"}:
         return execute_harness_tool(context, name, args, session_id, cancel_event)
+    from core.tools.checkpoint_tools import CHECKPOINT_TOOL_NAMES, execute_checkpoint_tool
+    if name in CHECKPOINT_TOOL_NAMES:
+        return execute_checkpoint_tool(context, name, args, session_id=session_id,
+                                       request_id=request_id)
     denied = reject_write(context.skills, spec, args_summary)
     if denied is not None:
         return denied

@@ -22,7 +22,7 @@ _PROVIDER_CLASSES = {
     "glm": GLMProvider,
 }
 
-
+# TASK-26 交付项 F（R26 补充 / ISSUE-HM-058）：provider 类型可声明——第三方 OpenAI
 # 兼容模型仅靠配置装配（llm.providers.<name>.protocol），不再改代码。
 _PROTOCOL_CLASSES = {
     "deepseek": DeepSeekProvider,

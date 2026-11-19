@@ -76,7 +76,7 @@ def _classify_io_error(exc: Exception, *, opening=True) -> VastarError:
     )
 
 
-QUEUE_PUT_TIMEOUT_S = 120.0   
+QUEUE_PUT_TIMEOUT_S = 120.0   # 投递等待上限（KM-22；原 120s 裸值）
 
 
 class BlockingSSESession:
@@ -112,7 +112,7 @@ class BlockingSSESession:
         )
         self._thread.start()
 
-    
+    # 所有请求一律直连（不经系统代理）——DeepSeek 裁定"必须直连"，
     # 不依赖 no_proxy 环境变量是否配置正确。
     _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -127,7 +127,7 @@ class BlockingSSESession:
             fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
             fut.result(timeout=QUEUE_PUT_TIMEOUT_S)
         except FuturesTimeoutError:
-            
+            # KM-17 分支①：事件循环仍在（纯超时）——队列长期满。丢弃事实留日志，
             # 并投递显式失败信号（消费端立即收到错误，而非等 idle 超时兜底）。
             log.error("队列投递超时（>=%ss）：丢弃 %s 项（KM-17 显式化，禁静默）",
                       QUEUE_PUT_TIMEOUT_S, kind)
@@ -141,7 +141,7 @@ class BlockingSSESession:
                 log.error("失败信号投递亦满——置 closed 收尾（丢弃事实已留日志）")
                 self._closed.set()
         except Exception as exc:  # noqa: BLE001
-            
+            # KM-17 分支②：事件循环已退出（run_coroutine_threadsafe 已无 loop 可投递，
             # 多为 RuntimeError）——**投递不可行**，至少留日志并收尾（禁只 set 了事）。
             log.error("事件循环已退出：%s 项无法投递（%s: %s）——"
                       "本分支无法投递失败信号，留此日志为唯一审计（KM-17）",

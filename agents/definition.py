@@ -1,4 +1,9 @@
-"""Vastar runtime component."""
+"""Agent 配置声明（agents/definition.py，采纳件 §10.1）。
+
+load_agent() 从 config/settings.json 装配 AgentDefinition——只做声明式配置的装载与校验，
+不持有运行状态（运行态归 SessionCoordinator / ReActRuntime）。
+进展性策略和 max_tool_rounds 轮数限制按运行时配置生效，本模块不承担工具调用终止。
+"""
 
 from __future__ import annotations
 
@@ -48,7 +53,7 @@ class AgentDefinition:
 
 
 def _need(block: dict, key: str, where: str) -> None:
-    """Vastar runtime component."""
+    """必填键守卫（KM-19：缺键给可读错误，禁裸 KeyError 泄漏）。"""
     if key not in block:
         raise ValueError(f"{where} 缺少必填键：{key}")
 
@@ -78,7 +83,7 @@ def load_agent(config_path: str | Path, *, raw: dict | None = None) -> AgentDefi
             "max_model_steps 必须 ≥1（R18/R22：语义为决策回合数，本阶段为 1；"
             f"tools.max_tool_rounds：{label}；缺键时才使用缺省值）")
     if not 1 <= attempts <= 4:
-        
+        # KM-19：文案与条件一致（原"必须 ≤4"漏下界）
         raise ValueError("max_attempts_per_step 必须在 1~4（采纳件 §7：主 3 + 备 1）")
 
 

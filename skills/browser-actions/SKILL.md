@@ -38,4 +38,4 @@ browser_fill 只接收 value_ref：人工在 browser.input_env 配置本地环�
 Task 处于阻塞或终态时先由任务恢复流程恢复可读状态，再导航核对；不绕过 Task 权限。
 
 skills.enabled、本文件 enabled、tools.enabled、browser.enabled 与 browser.writes_enabled 分开控制。
-默认配置保持关闭；关闭本技能不影响基础对话和其它工具。十阶段完成后的能力开放仍须 用户 决定。
+默认配置保持关闭；关闭本技能不影响基础对话和其它工具。十阶段完成后的能力开放仍须 Vange 决定。

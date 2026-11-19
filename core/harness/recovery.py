@@ -14,7 +14,7 @@ class RecoveryCoordinator:
         self.ledger = OperationLedger(store)
         self.diagnostics = []
 
-    def recover(self, task_id):
+    def recover(self, task_id, *, delivery_run=None):
         self.store._owner.assert_held()
         trace = ["owner"]
         report = {"task_id": task_id, "trace": trace, "operations": {}, "status": "needs_input"}
@@ -31,7 +31,8 @@ class RecoveryCoordinator:
             trace.append("watermark")
             pending = self._operation_ids(task_id, pending=True)
             for operation_id in pending:
-                report["operations"][operation_id] = self.ledger.reconcile(operation_id)
+                from core.harness.recovery_delivery import recover_operation
+                report["operations"][operation_id] = recover_operation(self, operation_id)
             trace.append("ledger")
             if any(r["status"] == "unknown" for r in report["operations"].values()):
                 raise ValueError("操作结果 unknown；禁止重试外部提交")
@@ -43,11 +44,17 @@ class RecoveryCoordinator:
             self._verify_task(current, body["task"])
             budget_row = self.store._conn.execute("SELECT active_run FROM task_runtime WHERE task_id=?", (task_id,)).fetchone()
             if budget_row and budget_row[0]:
-                raise ValueError("Run 预算尚未结算，恢复需核实，禁止重置")
+                from core.harness.recovery_delivery import permit_retained_budget
+                permit_retained_budget(self.store, current, body, budget_row[0], delivery_run)
             ref = body["context_ref"]
             _, content = self.artifacts.get(ref["artifact_id"], ref["version"])
             report.update(context=json.loads(content), task=current, budget_used=body["budget_used"],
                           budget_reserved=body["budget_reserved"], status=current["status"].lower())
+            if budget_row:
+                from core.harness.task_runtime import TaskRuntime
+                from core.harness.task_service import TaskService
+                used, reserved = TaskRuntime(TaskService(self.store, '')).checkpoint_budget(task_id)
+                report.update(budget_used=used, budget_reserved=reserved)
             with self.store.transaction():
                 self.store._conn.execute("UPDATE task_runtime SET recovery_error=NULL WHERE task_id=?", (task_id,))
             trace.append("context")
@@ -111,7 +118,8 @@ class RecoveryCoordinator:
             self.store._conn.execute("INSERT OR IGNORE INTO task_runtime(task_id) VALUES(?)", (task_id,))
             self.store._conn.execute("UPDATE task_runtime SET recovery_error=? WHERE task_id=?", (reason, task_id))
             self.store._conn.execute("UPDATE tasks SET status='WAITING_INPUT',revision=revision+1,updated_at=?"
-                                     " WHERE task_id=?", (self.store._now(), task_id))
+                                     " WHERE task_id=? AND status NOT IN ('COMPLETED','CANCELLED','BLOCKED')",
+                                     (self.store._now(), task_id))
 
     def recover_all(self):
         with self.store._lock:

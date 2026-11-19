@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""供应商统一接口（core/llm/base.py，采纳件 §10.1）。
+
+ProviderFrame 是适配器归一化后的最小数据单元；思考与正文是两个独立字段，
+分别产生独立帧——不得用"有 A 就不看 B"的互斥分支（基线 §3）。
+"""
 
 from __future__ import annotations
 

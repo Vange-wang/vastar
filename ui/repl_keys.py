@@ -1,10 +1,15 @@
-"""Vastar runtime component."""
+"""按键语义（ReplKeys mixin；B40 职责拆分自 ui/repl.py 移出，行为不变）。
+
+Ctrl+C 五语境分派（P0-1 接线，QD-011 口径；TASK-24/QD-115：询问态 = 拒绝该次工具确认）
++ 非模式语境 2.0s 连按强退窗口 + Enter 提交 / Ctrl+Enter（c-j）换行 / Ctrl+D 退出绑定。
+ReplUI 本体只留输入循环、SIGINT 兜底与边界计时器。
+"""
 
 import time
 
 from prompt_toolkit.key_binding import KeyBindings
 
-_CTRL_C_FORCE_QUIT_WINDOW_S = 2.0
+_CTRL_C_FORCE_QUIT_WINDOW_S = 2.0   # QD-011：第二次连按强退窗口（非模式语境）
 
 
 class ReplKeys:
@@ -24,7 +29,7 @@ class ReplKeys:
         def _newline(event):  # noqa: ANN001
             event.current_buffer.insert_text("\n")
 
-
+        # P0-1 接线（ISSUE-HM-010）：Ctrl+C 五语境分派（TASK-04 误删本绑定的教训）。
         @kb.add("c-c")
         def _ctrl_c(event):  # noqa: ANN001
             self._on_ctrl_c(bool(event.current_buffer.text), event)
@@ -38,7 +43,14 @@ class ReplKeys:
         return kb
 
     def _on_ctrl_c(self, has_draft: bool, event=None) -> None:
-        """Vastar runtime component."""
+        """c-c 键绑定入口（五语境 + 强退窗口 + TASK-24 询问态）。
+
+        QD-011 口径（交付报告同步声明）：强退窗口 = **2.0 秒**；
+        适用语境 = **非模式语境的任意状态**（生成中/空闲有草稿/空闲无草稿均可连按强退）；
+        /model 模式内的 Ctrl+C 用于回退模式，**不武装**强退计时（避免连按退出模式时误退程序）。
+        TASK-24（QD-115）：询问态下 Ctrl+C = 拒绝该次工具确认（user_cancel），
+        Run 继续（模型收到明确拒绝结果）；连按强退窗口照常武装。
+        """
         from ui.session_commands import cancel_replay
         if cancel_replay(self):
             return
@@ -54,7 +66,7 @@ class ReplKeys:
         elif action == "cancel_ask":
             self._renderer.render_note("已拒绝本次工具确认（Ctrl+C）；当前回答继续")
         elif action == "cancel_run":
-
+            # ISSUE-HM-023：真控制台 raw 模式下 Ctrl+C 只以 c-c 键事件到达（不产生
             # SIGINT），本分支是生成中取消的**唯一生效路径**——此前只提示不取消，
             # “已请求取消当前回答…”成了假提示（实机 FAIL 根因）。
             self._coordinator.request_cancel()
@@ -76,7 +88,9 @@ class ReplKeys:
         self._coordinator.stop()
 
     def _ctrl_c_semantics(self, has_draft: bool) -> str:
-        """Vastar runtime component."""
+        """Ctrl+C 语境分派。模式内回退是基线 C3 四场景之外的第 5 语境，
+        且**先于**其它场景被模式态吃掉（QD-005）：不清草稿、不弹 /exit 提示。
+        TASK-24（QD-115）：询问态 Ctrl+C = 拒绝该次工具确认（先于"取消 Run"判定）。"""
         if self._model_mode:
             self._model_mode = False
             return "exit_mode"

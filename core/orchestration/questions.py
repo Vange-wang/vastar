@@ -1,4 +1,16 @@
-"""Vastar runtime component."""
+"""B46.02 Worker needs_input 聚合（TASK-2026-10-09-89）：绑定 task/step/plan_revision。
+
+- ``emit(envelope, text)`` —— Worker 求助汇入。同一 (task_id, plan_revision, 规范化文本)
+  的问题**聚合去重**：多问合一，`asked_by` 记录全部提问 step（同一问题不重复问、不重复弹）。
+  返回 ``(Question, 是否新建)``。
+- ``answer(question_id, text, *, plan_revision, verify)`` —— 绑定校验：未知 id / 重复回答 →
+  显式 ValueError；``plan_revision`` 与绑定不符 = **过期答案**——标 `expired`、**不采信不应用**
+  （迟到答案不误用）；``verify`` 回调 = 回答前**重验依赖与授权**（宿主提供，必须显式 True）。
+- ``expire_stale(current_revision)`` —— 重规划后把旧 revision 的 pending 问题批量标 expired。
+- ``expire_pending()`` —— 取消树收口时清空待答（取消期间的问题不再可答）。
+
+本模块只做聚合与绑定校验，**不触达 provider、不改计划/结果**（迟到答案没有改写结果的通路）。
+"""
 import time
 from dataclasses import dataclass, replace
 from uuid import uuid4

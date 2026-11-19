@@ -1,4 +1,4 @@
-"""Vastar runtime component."""
+"""TASK-91: cancellation is task-wide, durable and serialized with lease admission."""
 
 
 def ensure(db):

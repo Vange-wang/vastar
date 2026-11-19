@@ -1,4 +1,9 @@
-"""Vastar runtime component."""
+"""RuntimeEvent 统一事件协议（采纳件 §4）。
+
+事件信封字段与类型表以 collab/decisions/2026-09-20-vastar-agent-orchestration-decisions_gpt.md
+§4.1/§4.2 为准。`seq` 在同一 Run 内严格递增；`request_epoch` 每次新请求递增，用于隔离
+取消边界之后到达的迟到数据；延迟计算一律用 monotonic_ns，墙上时钟仅作审计。
+"""
 
 from __future__ import annotations
 
@@ -60,7 +65,14 @@ def _business_value(key: str, value) -> object:
 
 
 def partition_fresh_events(events: list[dict], existing: dict[str, dict]) -> list[dict]:
-    """Vastar runtime component."""
+    """读回比对分流（B03.02）：返回真正需要插入的新事件（保持入参顺序）。
+
+    - event_id 未存在（库内与批内都没有）→ 新事件，待插；
+    - 同 event_id 同内容 → 合法重投（TASK-05 P0-5 幂等），跳过不报错；
+    - 同 event_id 异内容 → 抛 EventIdentityConflict（带 event_id/差异字段诊断），
+      且在任何写入之前抛出——冲突即整批不落，不留半截状态。
+    批内撞号同走此判定（否则两条异内容同 ID 会同批 INSERT 撞 UNIQUE，错误不定性）。
+    """
     fresh = []
     seen: dict[str, dict] = {}     # 批内已收 event_id → 首条事件
     for e in events:
@@ -93,13 +105,13 @@ class EventType:
     MODEL_CALL_FINISHED = "model_call.finished"
     HISTORY_TOOL_EXCHANGE = "history.tool_exchange"
     RUN_ENDED = "run.ended"
-    TOOL_REQUESTED = "tool.requested"      
+    TOOL_REQUESTED = "tool.requested"      # TASK-15（Spec §6）：五类工具审计事件
     TOOL_POLICY = "tool.policy"
     TOOL_EXECUTED = "tool.executed"
     TOOL_REJECTED = "tool.rejected"
     TOOL_FAILED = "tool.failed"
     TOOL_CANCELLED = "tool.cancelled"
-    TOOL_ASK = "tool.ask"                  
+    TOOL_ASK = "tool.ask"                  # TASK-24：询问交互留痕 + 落屏（合批路径）
     SKILL_LOADED = "skill.loaded"          # B11：技能加载/替换（D8 审计，含触发来源）
     SKILL_REJECTED = "skill.rejected"      # B11：同级/低优先拒绝（D4：拒绝必须留痕）
 
@@ -125,7 +137,7 @@ _REQUIRED_FIELDS = (
 )
 # step_index / attempt_id 按信封规范可空（int | None / str | None）
 
-SCHEMA_VERSION = 1   
+SCHEMA_VERSION = 1   # 事件协议 schema 版本（KM-22；采纳件 §4.1）
 
 
 _KNOWN_TYPES = {

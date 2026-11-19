@@ -1,4 +1,22 @@
-"""Vastar runtime component."""
+"""ReActRuntime：单步 ReAct 运行时（基线 §2/§3；状态机与数据类见 core/run_state.py）。
+
+五句纲领（采纳件）：一个 LLM 主脑、一个 ReAct 循环、一个运行状态修改入口、一套统一事件协议、
+一个可审计会话存储。Runtime 不直接写 SQL（存储经事件流由 StoreWriter/Coordinator 落库），
+不处理终端颜色，不自行启动新的 Run。
+
+不变量（基线 §3）：
+- 每个 Run 只有一个终态（状态机守卫）；
+- 取消边界之后到达的旧数据不得显示为当前回答（消费任务被取消 + request_epoch 隔离）；
+- 用户取消不自动触发重试/切备/下一条排队；
+- 收到任何有效思考或正文增量后不再自动重试或切备（重新生成无法"从刚才那个字继续"）。
+
+取消与完成竞争的实现口径（随自测报告送审）：流已自然结束（outcome 产出）时完成胜出、
+取消记为 no-op；流未结束时取消胜出。两条路都只产生一个终态。
+
+token 闸门口径（token-gate 裁定②）：正常路径 = 估算预警闸门（放行时诚实标注 estimated，
+超限显式失败）；`RunRequest.strict_gate=True` 是"要求可信上界"的路径，阶段一只有启发式
+估算时返回 TOKEN_GUARANTEE_UNAVAILABLE 拒绝调用。
+"""
 
 from __future__ import annotations
 
@@ -46,8 +64,8 @@ def _capability_note(enabled: list[str], permission_mode: str = "ask") -> str:
     head = (f"当前已启用工具：{names}。可读写文件与目录：覆盖/改写前自动备份、"
             "删除可逆恢复；凭据类、.git 内部、系统目录、config/logs/memory 始终拒绝。")
     if permission_mode == "auto":
-        tail = ("写操作自动执行、不再逐次询问。优先直接回答用户，仅在需要文件/目录"
-                "信息时调用工具。")
+        tail = ("写操作自动执行、不再逐次询问。优先直接回答用户，仅在需要外部信息"
+                "或文件内容时调用工具。")
     else:
         tail = ("项目内常规读写直接执行；项目外、删除与批量操作会先向用户确认"
                 "（用户回答 1 允许 / 2 拒绝 / 3 本会话内同类动作都允许）。"
@@ -64,9 +82,9 @@ class ReActRuntime:
                  env_facts: str = "", continuation=None, skills=None) -> None:
         self._answer_id = answer_message_id_factory  # (session_id, run_id) -> message_id
         self._tools = tools                    # None = 工具能力关闭（default-closed，行为同阶段一）
-        self._env_facts = env_facts            
+        self._env_facts = env_facts            # TASK-26 B：运行时渲染的「环境事实」段（空 = 不注入）
         self._skills = skills                  # B11：SkillsContext（None = 技能能力关闭）
-        
+        # TASK-34：撞顶自动续写（core/continuation.py；None = 关闭）
         self._runner = AttemptRunner(self._prepare_context, tools=tools, continuation=continuation)
 
     async def run(self, request: RunRequest, emit) -> RunResult:
@@ -83,7 +101,7 @@ class ReActRuntime:
             if request.primary:
                 from core.limits import optional_limit
                 total_s = optional_limit(request.primary.timeouts.get("run_total_s", DEFAULT_RUN_TOTAL_S))
-            shared.run_total_s = total_s   
+            shared.run_total_s = total_s   # TASK-34：续写共享该预算（不复位）；超时走
                                            # run_total_timeout 正常结束 + 如实标注
             if self._skills is not None:
                 # B11：每 Run 一个激活门；关键词先、显式后（显式优先级高可替换留痕）
@@ -151,8 +169,9 @@ class ReActRuntime:
             await s.emit(s.factory.build(etype, rec.to_payload(), channel=Channel.STATUS))
 
     def _prepare_context(self, request: RunRequest, spec: ProviderSpec) -> ContextResult:
+        from core.harness.task_draft import is_draft_request
         schema_text = None
-        if self._tools is not None:
+        if self._tools is not None and not is_draft_request(request):
             # 工具清单（name/description/parameters）计入 token 预算（Spec §7）
             note = _capability_note(self._tools.registry.enabled,
                                     self._tools.permission_mode)
@@ -162,7 +181,7 @@ class ReActRuntime:
         else:
             note = _capability_note([])
         if self._env_facts:
-            
+            # TASK-26 B：环境事实段同为运行时注入（不进 prompts 静态文本）
             note = f"{note}\n{self._env_facts}"
         if self._skills is not None:
             # B11：常驻清单（name+description）+ 被选中技能正文（D5/D6，全量计 token）
@@ -170,7 +189,7 @@ class ReActRuntime:
         kwargs = dict(
             prompt_bundle=request.prompt_bundle,
             history=request.history,
-            
+            # TASK-34：/continue 手动续写不注入新 user 消息（历史末尾 partial 回答即前缀）
             current_input="" if request.continuation_of else request.input_text,
             profile=spec.profile,
             safety_margin_ratio=float(request.token_cfg.get("safety_margin_ratio", 0.1)),
@@ -222,7 +241,7 @@ class ReActRuntime:
             outcome, fail_err = await self._runner.attempt_once(
                 s, spec, attempt_id, attempt_counter, ctx_result)
             if fail_err is None and outcome is not None and await self._runner.classify_stream_end(
-                    s, outcome, spec, ctx_result):   
+                    s, outcome, spec, ctx_result):   # TASK-34：ctx_result 供撞顶续写装配前缀
                 return
             if fail_err is None:
                 fail_err = VastarError(

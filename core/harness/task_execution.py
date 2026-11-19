@@ -54,7 +54,11 @@ async def run_with_task(coordinator, request):
 
 
 def refusal_note(store, session_id, error: str) -> str:
-    """Vastar runtime component."""
+    """普通输入被拒（needs_input）时的可操作指引（HM-150）。
+
+    指明 /task step · /task resume · /new 各自何时能用；只读直读（checkpoint_latest
+    为 SELECT），不改任何拒绝判据——判据仍由 reserve/恢复链决定，这里只改提示措辞。
+    """
     task = store.task_for_session(session_id)
     if task is None:
         return error
@@ -74,7 +78,13 @@ def refusal_note(store, session_id, error: str) -> str:
 
 
 def continue_precheck(store, session_id) -> str | None:
-    """Vastar runtime component."""
+    """任务态 /continue 的只读预检（HM-148）：None=可续写；否则返回真实原因+可用动作。
+
+    与 TaskRuntime.reserve 前置条件同口径，但**只读**（不调 snapshot/reserve，不写库；
+    过期问题按 expires_at 过滤即可，过期落库是命令侧职责）。目的：把「提示让 /continue、
+    按了却跑出一个 needs_input 空 Run」改为命令当场说清原因与下一步。dispatch 期的
+    reserve 仍是权威判定（预检不替代、不放宽）。
+    """
     task = store.task_for_session(session_id)
     if task is None:
         return None   # 非任务态：/continue 语义不变

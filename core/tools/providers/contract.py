@@ -26,6 +26,14 @@ def identifier(value):
 
 def schema(value, depth=0):
     require(isinstance(value, dict) and depth < 5, 'provider_schema_invalid')
+    if '$schema' in value:
+        require(depth == 0 and value['$schema'] in {'https://json-schema.org/draft/2020-12/schema',
+                'http://json-schema.org/draft-07/schema#'}, 'provider_schema_unsupported')
+        value = {k: v for k, v in value.items() if k != '$schema'}
+    if 'anyOf' in value:
+        require(not set(value) - {'anyOf', 'description', 'title'} and isinstance(value['anyOf'], list)
+                and 1 <= len(value['anyOf']) <= 4, 'provider_schema_unsupported')
+        return {'anyOf': [schema(branch, depth + 1) for branch in value['anyOf']]}
     require(not set(value) - {'type', 'properties', 'required', 'additionalProperties', 'items',
                               'enum', 'description', 'title'}, 'provider_schema_unsupported')
     kind = value.get('type')
@@ -52,6 +60,14 @@ def schema(value, depth=0):
 
 def arguments(value, spec, depth=0):
     require(depth < 6, 'provider_arguments_invalid')
+    if 'anyOf' in spec:
+        for branch in spec['anyOf']:
+            try:
+                arguments(value, branch, depth + 1)
+                return
+            except ProviderError:
+                continue
+        require(False, 'provider_arguments_invalid')
     kinds = {'object': dict, 'array': list, 'string': str, 'integer': int, 'number': (int, float),
              'boolean': bool, 'null': type(None)}
     kind = spec['type']

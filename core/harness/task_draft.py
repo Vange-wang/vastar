@@ -1,4 +1,15 @@
-"""Vastar runtime component."""
+"""/task new 起草与人话摘要（HM-144/HM-145/HM-146，TASK-2026-10-05-78）。
+
+口径：
+- 起草走**正常 Run**（模型调用不绕开 model_gateway 唯一供应商边界）：/task new 只是
+  提交一条带起草指令的用户输入；模型回答里的 ```json 计划草案即「展示给用户确认」。
+- 用户显式确认不可省：/task ok 才落库；落库仍走既有 accept（全部硬校验原样生效，
+  本模块只做「草案预检」，不替代也不弱化 accept）。
+- 旧会话不自动变任务：/task ok 只消费本会话 /task new 登记过的起草请求；普通聊天
+  不产生草稿，ok 显式拒绝（反例语义保持）。
+- HM-146：命令层 accept 与草案预检都要求 budget 含正整数 max_calls（缺则显式报错
+  并给示例），杜绝「建得出、永远派发不了」的任务；服务层契约与派发期兜底不变。
+"""
 import json
 import re
 
@@ -9,12 +20,20 @@ DRAFT_INSTRUCTION = (
     "[结构化任务起草请求] 请为下面的目标起草一份任务计划，回答中只输出一个 ```json 代码块"
     "（不要输出其他内容）。JSON 字段：\n"
     '"goal"：字符串，任务目标；\n'
-    '"acceptance"：非空对象，键 a1/a2…，值为可核对的验收描述；\n'
+    '"acceptance"：非空对象，键 a1/a2…，值为确定性验收对象，不能是描述字符串；'
+    '文件成果使用 {"kind":"file_hash","path":"绝对输出路径","sha256":"预期内容SHA256"}；'
+    '命令使用 {"kind":"command","argv":["程序","参数"],"exit_code":0,"stdout_sha256":"预期输出SHA256"}。'
+    '不能猜造路径、内容或哈希；缺关键参数时只输出 {"clarification":"请补充哪些信息"}，不生成计划。\n'
     '"constraints"：数组（可为空）；\n'
     '"budget"：对象，必须含 "max_calls"（正整数，如 {"max_calls": 10}）；\n'
     '"steps"：非空数组，每项 {"step_id": "step-1"（step- 前缀且唯一）, "goal": "步骤目标", '
     '"depends_on": [前置 step_id], "acceptance_ids": [acceptance 的键], "independent": true/false}。\n'
-    "目标：")
+    "这里只起草，不执行工具；用户 /task ok 接受后才可选步骤执行，最后 /task deliver 验收交付。\n目标：")
+
+
+def is_draft_request(request):
+    """The existing draft instruction is a restrictive, never privilege-granting marker."""
+    return request.input_text.startswith(DRAFT_INSTRUCTION)
 
 _FENCE = re.compile(r"```(?:json)?[ \t]*\n(.*?)```", re.S)
 
@@ -66,7 +85,7 @@ def validate_draft(data: dict) -> dict:
 
 
 def require_max_calls(budget) -> None:
-    """Vastar runtime component."""
+    """HM-146：budget 须含正整数 max_calls（否则任务建得出、永远派发不了）。"""
     if isinstance(budget, dict) and (type(budget.get("max_calls")) is not int
                                      or budget["max_calls"] <= 0):
         raise ValueError('budget 须含 "max_calls": 正整数（如 {"max_calls": 10}）；'
@@ -74,13 +93,14 @@ def require_max_calls(budget) -> None:
 
 
 def task_summary(task: dict) -> str:
-    """Vastar runtime component."""
+    """HM-145：accept/ok 成功的人话摘要；内部字段细节留给 /task status。"""
     lines = [f"任务已接受：{task['task_id']} · 状态 {task['status']}",
              f"目标：{task['goal']}", "步骤："]
     for s in task["steps"]:
         lines.append(f"  {s['step_id']} [{s['status']}] {s['goal']}")
     remaining = ", ".join(task["remaining_work"]) or "无"
     lines.append(f"剩余工作：{remaining} · 细节 /task status")
+    lines.append("下一步：/task step <Step ID> 选步骤 → 输入执行要求 → /task deliver 验收交付。")
     return "\n".join(lines)
 
 
@@ -105,7 +125,11 @@ def find_draft_answer(store, session_id: str, request_message_id: str) -> str | 
 
 
 def artifacts_blocker(coord) -> str | None:
-    """Vastar runtime component."""
+    """HM-149：产物库不可用的前置拦截文案（B13 口径：如实报错 + 可复制的初始化命令）。
+
+    不静默退化、不自动初始化——只把「不可用」的提示提前到花模型调用/落库之前；
+    产物库可用性判据本身不变（put 时 _require_dir 的显式报错仍在）。
+    """
     ctx = getattr(coord, "task_tools_context", None)
     artifacts = getattr(ctx, "artifacts", None)
     if artifacts is not None and artifacts.available():
@@ -118,12 +142,14 @@ def artifacts_blocker(coord) -> str | None:
 
 async def task_new_command(coord, goal: str) -> str:
     """/task new <自然语言目标>：登记起草请求并提交正常 Run（模型起草在回答里展示）。"""
+    from core.llm.pricing import require_task_model
+    require_task_model(coord)
     goal = goal.strip()
     if not goal:
         raise ValueError("用法：/task new <自然语言目标>")
     if coord.task_service.store.task_for_session(coord.session_id):
         raise ValueError("当前会话已有 Task；不自动另建目标（/task status 查看，/new 开新会话）")
-    blocker = artifacts_blocker(coord)   
+    blocker = artifacts_blocker(coord)   # HM-149：花模型调用起草之前先拦
     if blocker:
         raise ValueError(blocker)
     budget = getattr(getattr(coord, 'task_tools_context', None), 'task_budget_defaults', {})
@@ -143,11 +169,14 @@ def task_ok_command(coord, tail: str = ""):
     answer = find_draft_answer(coord._store, coord.session_id, draft["request_message_id"])
     if answer is None:
         raise ValueError("起草回答尚未落库（模型仍在起草或起草未成功）；稍后再 /task ok")
-    blocker = artifacts_blocker(coord)   
+    blocker = artifacts_blocker(coord)   # HM-149：落库前最后拦截（new 与 ok 之间环境可能变化）
     if blocker:
         raise ValueError(blocker)
     try:
-        plan = validate_draft(extract_draft(answer))
+        data = extract_draft(answer)
+        if data.get('clarification'):
+            return f"仍缺信息：{data['clarification']}；请补充后继续，尚未建立 Task。"
+        plan = validate_draft(data)
     except ValueError as exc:
         raise ValueError(f"草案不可用：{exc}；/task drop 放弃后重新 /task new") from exc
     task = coord.task_service.accept(coord.session_id, _source(coord, draft["goal"]), **plan)

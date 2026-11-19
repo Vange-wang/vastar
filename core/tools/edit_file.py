@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""edit_file：按「原文本 → 新文本」精确替换（TASK-24 写操作组；R25）。
+
+old 必须唯一命中：0 处 / 多处（未显式 replace_all）都在计划阶段显式拒绝并回显命中数
+（任务单 ①A）。权限判定不在本文件（执行层收口）；编辑前备份由执行层完成，写入原子。
+"""
 
 from __future__ import annotations
 

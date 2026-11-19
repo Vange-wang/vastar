@@ -1,4 +1,12 @@
-"""Vastar runtime component."""
+"""OpenAI 兼容流式适配器（DeepSeek / GLM 共用协议骨架）。
+
+归一化规则（基线 §3 / 采纳件 §4.3）：
+- 同一数据块同时含思考与正文 → 按固定顺序拆成两个独立帧；
+- 任何字段为空不影响另一字段；无思考字段不得伪造；
+- 只有 usage/心跳的数据块不是坏响应；
+- 检测到 tool_calls 结构 → 产出 tool_calls 帧（运行时据此报 CAPABILITY_UNAVAILABLE，
+  阶段一零工具）。
+"""
 
 from __future__ import annotations
 
@@ -10,9 +18,9 @@ from core.llm.base import FrameKind, LLMProvider, LLMRequest, ProviderFrame
 from core.llm.http_stream import BlockingSSESession
 from core.llm.sse import SSEDecoder
 
-DEFAULT_CONNECT_TIMEOUT_S = 10.0        
-DEFAULT_FIRST_DELTA_TIMEOUT_S = 30.0    
-DEFAULT_STREAM_IDLE_TIMEOUT_S = 60.0    
+DEFAULT_CONNECT_TIMEOUT_S = 10.0        # KM-22：与 config timeouts.connect_s 同值
+DEFAULT_FIRST_DELTA_TIMEOUT_S = 30.0    # KM-22：首增量超时缺省（心跳不刷新）
+DEFAULT_STREAM_IDLE_TIMEOUT_S = 60.0    # KM-22：流空闲超时缺省
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -167,7 +175,7 @@ class OpenAICompatProvider(LLMProvider):
                 for frame in chunk_frames:
                     if frame.kind in (FrameKind.REASONING, FrameKind.CONTENT):
                         got_model_content = True
-                    if frame.kind != FrameKind.HEARTBEAT:   
+                    if frame.kind != FrameKind.HEARTBEAT:   # KM-02：心跳不刷新首增量计时
                         produced_any = True
                     yield frame
                 if decoder.done:

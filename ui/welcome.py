@@ -1,4 +1,9 @@
-"""Vastar runtime component."""
+"""TASK-116 §1/§2/§8：欢迎页文案与用户名（界面的显示名称配置）读写。
+
+欢迎页只保留品牌与入口提示——启动预检段/模型行/Output 诊断**不在启动页显示**
+（预检信息仍可在 `/status` 查到，§2 澄清）；模型名挪到输入行上方状态行。
+用户名写回采用**文本级插入/替换**，不重排整份 JSON（配置基线其余字节不动）。
+"""
 from __future__ import annotations
 
 import json
@@ -28,7 +33,7 @@ def sanitize_user_name(text: str) -> str:
 
 
 def write_user_name(config_path: str | Path, name: str) -> str:
-    """把称呼写入 config `ui.user_name`（长期沿用）；返回实际写入的名字。
+    """把称呼写入 界面的显示名称配置（长期沿用）；返回实际写入的名字。
 
     文本级操作：已有键 → 只替换该键值；无键 → 在 `"ui": {` 后插入一行。
     找不到 ui 对象则显式报错（不静默、不重排整份配置）。
@@ -44,7 +49,7 @@ def write_user_name(config_path: str | Path, name: str) -> str:
     if '"user_name"' in raw:
         updated, count = pattern.subn(lambda m: m.group(1) + encoded, raw, count=1)
         if count != 1:
-            raise ValueError(f"{path} 的 ui.user_name 文本定位失败")
+            raise ValueError(f"{path} 的 显示名称 文本定位失败")
     else:
         anchor = re.search(r'"ui"\s*:\s*\{\s*\n([ \t]*)', raw)
         if anchor is None:

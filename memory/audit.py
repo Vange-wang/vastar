@@ -78,7 +78,7 @@ class MemoryAudit:
             restore_value = target.value
             restore_op = "write"
         else:
-            
+            # KM-05：write 的回滚 = 查 previous_revision 的旧值并写回（非整键删除）
             prev_row = self._conn.execute(
                 "SELECT value FROM memory_revisions"
                 " WHERE key=? AND revision<? AND operation='write'"

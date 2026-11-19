@@ -1,4 +1,9 @@
-"""Vastar runtime component."""
+"""回合内工具往返（Spec §10 方案 A / QD-072；TASK-15 P0-4）。
+
+从 AttemptRunner 拆出（铁律 V6：AttemptRunner 类 ≤300）。职责：执行模型请求的
+工具调用 → 回填 → 同 attempt 内再请求终答；链深度按 Run 累计（R18）；
+四处语义见 run() docstring。
+"""
 
 from __future__ import annotations
 
@@ -103,7 +108,15 @@ class ToolRoundTripper:
     async def run(self, s: SharedState, spec: ProviderSpec, llm_request: LLMRequest,
                   attempt_id: str, attempt_index: int,
                   outcome: AttemptOutcome) -> AttemptOutcome:
-        """Vastar runtime component."""
+        """回合内工具往返循环（R22：终止判据 = 死循环/无进展检测，兜底 max_tool_rounds）。
+
+        语义（Spec v1.9 §10 / QD-076 / R22）：不新增 attempt 记录、不额外消耗
+        MAX_TOTAL_ATTEMPTS（本次 attempt 已按 1 计入 attempt 与主备切换计数）；
+        取消沿用既有取消路径（状态 cancelled）；Run 级总超时优先于工具超时；
+        各次模型调用同 attempt_id，工具事件与 phase 供审计区分；历史按 Run 累计
+        （SharedState.tool_history，不因重试/主备切换复位）。
+        B20：执行后四项事实共同判定；第二次同参照常执行，轮数按配置（缺键 10，null 不设本地上限）。
+        """
         tools = self._tools
         if s.tool_rounds == 0:
             await self._emit_tool(s, "tool.policy", {"limit_mode": "unlimited" if tools.max_tool_rounds is None else "finite",
@@ -263,7 +276,7 @@ class ToolRoundTripper:
                 request_id=s.request.run_id,
                 operation_id=f"op-{s.request.run_id}-{tc.get('id')}")
             hist = {"requests": hist["requests"] + 1}
-            
+            # 四态分派拆出（V6：本函数 82→63；KM-09 标记与事件发射随迁）
             content = await self._dispatch_result(
                 s, name, result, attempt_id, attempt_index)
             if name == USE_SKILL_TOOL and self._tools.skills is not None:
@@ -288,10 +301,22 @@ class ToolRoundTripper:
         return messages, False
 
     async def _dispatch_result(self, s, name, result, attempt_id, attempt_index):
-        return await dispatch_result(self._emit_tool, s, name, result, attempt_id, attempt_index)
+        content = await dispatch_result(self._emit_tool, s, name, result, attempt_id, attempt_index)
+        # TASK-151①：每次工具执行后框架级自动快照（不靠模型自觉）；every_n 可配
+        snap = getattr(self._tools, "checkpoint_snapshots", None)
+        if snap is not None and result.status == "executed":
+            try:
+                snap.on_tool_executed(
+                    session_id=s.request.session_id, run_id=s.request.run_id,
+                    task_id=s.request.task_id, tool=name,
+                    target=(result.audit or {}).get("target"),
+                    exec_count=s.tool_exec_count)
+            except Exception as exc:  # noqa: BLE001 快照是簿记，不拖垮 run；但显式留痕
+                s.warnings.append(f"checkpoint 自动快照失败：{exc!r}")
+        return content
 
     def _ask_emitter(self, s: SharedState, attempt_id: str, attempt_index: int):
-        """Vastar runtime component."""
+        """tool.ask 事件发射器（TASK-24）：询问留痕 + 落屏，走既有 _emit_tool 合批路径（R9）。"""
 
         async def emit(payload: dict) -> None:
             await self._emit_tool(s, EventType.TOOL_ASK, payload, attempt_id, attempt_index)

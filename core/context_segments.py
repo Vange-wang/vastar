@@ -1,4 +1,11 @@
-"""Vastar runtime component."""
+"""上下文片段选择与预算闸门（TASK-2026-10-02-51 / B16 交付项 0：从 prepare_context 拆出）。
+
+职责：文本集计量 → 预算闸门 → 超预算时先试「大输出引用折叠」**显式层** → 复量 →
+仍超则显式失败。折叠 = 把含大输出引用标记（`[大输出引用`，与 harness/preflight.py
+的 large_output_refs 分项识别同口径）的历史消息投影折叠为引用行（原文在产物库，
+可经 read_artifact 续读）——登记进 layers_executed，**不是静默删历史**（V2）；
+预算内零行为变化。
+"""
 
 from __future__ import annotations
 

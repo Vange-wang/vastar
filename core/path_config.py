@@ -1,4 +1,4 @@
-"""Vastar runtime component."""
+"""可追溯配置合并与路径解析；优先级为 TASK-48 建议实现，待 Hermes 采纳。"""
 import os
 from copy import deepcopy
 from dataclasses import dataclass

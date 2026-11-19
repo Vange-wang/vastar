@@ -45,9 +45,13 @@ def authorize(access, user_id, project_id, source_ids, since, until):
     return sources, start, end
 
 
-def candidate_query(access, sources, since, until, after, limit):
-    clauses = ["s.user_id=?", "s.project_id=?", "h.status='active'", 'h.id>?']
-    args = [access.user_id, access.project_id, after]
+def candidate_query(access, sources, since, until, after, limit, newest_first=False):
+    clauses = ["s.user_id=?", "s.project_id=?", "h.status='active'"]
+    args = [access.user_id, access.project_id]
+    if after:
+        clauses.append('h.id<?' if newest_first else 'h.id>?')
+        args.append(after)
+    order = 'DESC' if newest_first else 'ASC'
     if sources is not None:
         clauses.append('h.source_id IN (' + ','.join('?' for _ in sources) + ')')
         args.extend(sources)
@@ -61,7 +65,7 @@ def candidate_query(access, sources, since, until, after, limit):
     clauses.append("EXISTS(SELECT 1 FROM sessions x WHERE x.session_id=h.session_id)")
     clauses.append("(h.kind!='message' OR EXISTS(SELECT 1 FROM messages m WHERE m.message_id=h.source_id))")
     return ('SELECT h.* FROM history_scopes s JOIN history_sources h ON h.session_id=s.session_id WHERE '
-            + ' AND '.join(clauses) + ' ORDER BY h.id LIMIT ?', [*args, limit + 1])
+            + ' AND '.join(clauses) + f' ORDER BY h.id {order} LIMIT ?', [*args, limit + 1])
 
 
 class HistoryService:
@@ -70,7 +74,7 @@ class HistoryService:
         self.artifacts = artifacts
 
     def list(self, *, user_id=None, project_id=None, source_ids=None, since=None, until=None,
-             after=0, limit=50):
+             after=0, limit=50, newest_first=False):
         try:
             from memory.expiry import expire_contexts
             from memory.forget_journal import ensure_replayed
@@ -82,7 +86,7 @@ class HistoryService:
                 raise ValueError('source_ids 必须为最多 200 个 ID')
             ensure_replayed(self.store)
             expire_contexts(self.store)
-            sql, args = candidate_query(self.access, sources, start, end, after, limit)
+            sql, args = candidate_query(self.access, sources, start, end, after, limit, newest_first)
             with self.store._lock:
                 rows = [dict(r) for r in self.store._conn.execute(sql, args)]
             return {'status': 'ok' if rows else 'empty', 'items': rows[:limit],

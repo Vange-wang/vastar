@@ -1,4 +1,18 @@
-"""Vastar runtime component."""
+"""写操作安全底线设施（TASK-24 / R25）：覆盖前备份 · 原子写 · 可逆删除落点。
+
+底线四条中的三条在本模块实现（全量审计在执行层事件流）：
+- 覆盖前自动备份：`backup_file()`——执行层在询问前调用；备份失败必须拒绝写（调用方捕获 OSError 转 DENY）；
+- 原子写：`atomic_write_text()`——临时文件写满 + fsync + `os.replace`（同卷原子替换），
+  中断不留半截文件（注入失败用例锁定）；
+- 删除可逆：`recyclable()` / `recycle_delete()`（系统回收站，标准库 ctypes
+  SHFileOperationW + FOF_ALLOWUNDO，零第三方依赖——红线 4）与 `move_to_trash()`
+  （退化落点 `memory/_trash/<时间戳>-<短随机>/`，禁硬删）。
+
+落点纪律（任务单 ①B 定死）：备份与 `_trash` 均在 `memory/` 之下（自动受硬拒清单覆盖）；
+本模块的写入属**内部写入、不经权限层**——权限层只管模型发起的调用，故 `memory/**`
+的 DENY 不会拦截备份与可逆删除本身（否则底线自缚）。唯一 id 用 uuid4
+（Windows time_ns 粗分辨率坑，zcode.md §4）。
+"""
 
 from __future__ import annotations
 
@@ -18,7 +32,11 @@ NO_RECHECK_NOTE = "（成功结果已含路径/字节/是否覆盖/备份位置/
 
 
 def verification_facts(path: Path) -> str:
-    """Vastar runtime component."""
+    """写后校验事实（TASK-26 D2 / R25 补充⑪）：sha256 前 16 位 + mtime。
+
+    文件读内容算摘要；目录 sha256 不适用（给 mtime），调用方在删除/移动**之前**取值
+    可留"删除前/移动前"凭证。
+    """
     mtime = datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
     if path.is_dir():
         return f"校验：目录（sha256 不适用）· mtime {mtime}"
@@ -28,7 +46,7 @@ def verification_facts(path: Path) -> str:
 _BACKUP_TOP = ("memory", "_backups")
 _TRASH_TOP = ("memory", "_trash")
 
-
+# B10（TASK-45）：删除结果的恢复凭证保留期限口径（如实声明，不虚构自动清理任务）
 TRASH_RETENTION = "unlimited_no_auto_purge"   # memory/_trash 无自动清理——永久保留至手动清理
 RECYCLE_RETENTION = "os_managed"              # 系统回收站由 OS 策略管理，Vastar 不控制
 _DRIVE_FIXED = 3   # GetDriveTypeW：固定本地盘才有回收站；网络盘/可移动盘允许"永久删除"，必须排除
@@ -151,7 +169,7 @@ def move_to_trash(target: Path, project_root: Path, *, data_dir: Path | None = N
 
 
 def recovery_credential(recover, original: Path) -> dict:
-    """Vastar runtime component."""
+    """删除结果的恢复凭证（B10/TASK-45）：恢复位置 + 原路径 + 保留期限（如实声明）。"""
     if recover == "系统回收站":
         return {"credential": "系统回收站", "original_path": str(original),
                 "retention": RECYCLE_RETENTION}

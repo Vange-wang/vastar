@@ -1,4 +1,11 @@
-"""Vastar runtime component."""
+"""三通道触发与超额处置（skills-decisions v1.2 D4；TASK-2026-10-02-46）。
+
+优先级定死：显式(3) > 关键词(2) > 模型(1)。同一轮最多 max_active 个（默认 1）：
+- 新请求优先级更高 → 替换当前最低优先级者（记审计，action=replaced）；
+- 与当前同级 → 拒绝并提示下一轮重新触发（不承诺不存在的自动排队）；
+- 冲突/重复只加载一次（action=already_active）。
+每条决策都产 ActivationRecord（含来源/hash/版本/触发原因）——审计与 Run 冻结共用。
+"""
 
 from __future__ import annotations
 

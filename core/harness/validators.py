@@ -1,4 +1,4 @@
-"""Vastar runtime component."""
+"""确定性验收；只使用受管产物/账本事实，模型意见不参与真假裁定。"""
 import hashlib
 import json
 from pathlib import Path

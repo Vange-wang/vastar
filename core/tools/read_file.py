@@ -1,4 +1,19 @@
-"""Vastar runtime component."""
+"""read_file：只读文件工具实现（Spec §4.1 + TASK-24 v1.9 §①D 范围读，ISSUE-HM-051）。
+
+权限级别判定**不在本文件**（由执行层统一收口）；本文件内权限判定符号必须零命中
+（DoD 11 机械 grep）。
+
+范围读（v1.9 §①D1）：start_line（1-based，默认 1）+ max_lines（默认 200、上限 2000）
+分段读大文件；max_bytes 退为单次字节安全阀（默认 16384、上限 65536，与行数取先到，
+整行回退、切点恒对齐行边界）。返回必带**进度头 + 进度尾**（防"只读一段就下结论"）；
+拒绝/超限时给**分段计划**（替代对大文件无效的"调大 max_bytes"）。
+行口径 = "\\n" 分隔、尾随换行不另计一行——与 search_text 一致，行号可互相直喂（§①D2）。
+
+内存纪律（TASK-28 KM-14，QD-172 口径）：**先 stat 决定读取策略、不用于拒绝**——
+整文件 ≤ 本次预算 → 整体读（现状行为）；整文件 > 预算 → **不得一次性 read_bytes 全文
+入内存**：行索引用分块流式扫描构建（单块 ≤64KB，按 (size, mtime) 缓存），目标区间
+按字节偏移 seek 定点读取（单次读取量 ≈ 请求区间）。拒绝语义不变，大文件分段可达不退化。
+"""
 
 from __future__ import annotations
 
@@ -107,7 +122,7 @@ def _line_index(path: Path) -> tuple[int, int, list[int]]:
 
 
 def _read_span(path: Path, offset: int, length: int) -> bytes:
-    """Vastar runtime component."""
+    """seek 定点读取 [offset, offset+length)——单次读取量 ≈ 请求区间（KM-14）。"""
     with _open_rb(path) as fh:
         fh.seek(offset)
         return fh.read(length)
@@ -136,7 +151,11 @@ def _parse_args(args: dict) -> tuple[int, int, int]:
 
 def run(args: dict, *, resolved_path: Path, resolved_extra=None,
         project_root=None, skip=None, op_context=None) -> str:
-    """Vastar runtime component."""
+    """范围读取。resolved_path 由执行层解析；行口径与 search_text 一致（1-based）。
+
+    读取策略（KM-14）：先 stat 取整文件大小**只决定策略、不用于拒绝**——
+    整文件 ≤ 本次预算 → 整体读（现状行为）；否则行索引（流式扫描+缓存）+ seek 定点读区间。
+    """
     start, max_lines, budget = _parse_args(args)
     control = from_context(op_context)
     size = resolved_path.stat().st_size

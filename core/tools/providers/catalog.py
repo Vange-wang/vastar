@@ -17,7 +17,13 @@ class Catalog:
         if config.get('enabled', False):
             for sid, item in config.get('servers', {}).items():
                 identifier(sid)
-                self.servers[sid] = MCPProvider(item, context.network_service.search.network)
+                transport = item.get('transport', 'http')
+                require(transport in {'http', 'stdio'}, 'provider_transport_unsupported')
+                if not item.get('enabled', transport == 'http'):
+                    continue
+                from core.tools.providers.stdio import StdioProvider
+                factory = StdioProvider if transport == 'stdio' else MCPProvider
+                self.servers[sid] = factory(item, context.network_service.search.network)
                 store = context.operation_ledger.store
                 with store._lock:
                     row = store._conn.execute("SELECT facts FROM tool_operations WHERE "
@@ -32,7 +38,8 @@ class Catalog:
         self.events.append({**payload, 'artifact_ref': artifact.uri})
 
     def enabled(self, sid, name, requested):
-        current = bool(requested and self.config.get('enabled') and sid in self.online and name not in self.blocked)
+        current = bool(requested and self.config.get('enabled') and sid in self.online and name not in self.blocked
+                       and self.servers[sid].config.get('enabled', True))
         if self.observed.get(name) != current:
             self.audit('enabled' if current else 'disabled', sid, name)
             self.observed[name] = current
@@ -40,7 +47,7 @@ class Catalog:
 
     def disconnect(self, sid):
         self.online.discard(sid)
-        self.servers[sid].session = None
+        self.servers[sid].close()
         self.audit('disconnected', sid)
         for spec in self.context.registry._specs.values():
             if spec.server_id == sid:

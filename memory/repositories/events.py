@@ -8,7 +8,7 @@ from core.events import partition_fresh_events
 
 
 def _event_row(e: dict) -> tuple:
-    """Vastar runtime component."""
+    """事件 dict → events 表行（B03：抽出以便 append_events 保持最小体积，HM-082）。"""
     return (e["event_id"], e["session_id"], e["run_id"], e["seq"], e["request_epoch"],
             e["type"], e["channel"], e["producer"], e["origin"], e["timestamp_utc"],
             e["monotonic_ns"], json.dumps(e["payload"], ensure_ascii=False))
@@ -69,7 +69,13 @@ class EventStoreMixin:
                 raise
 
     def append_events(self, events: list[dict]) -> None:
-        """Vastar runtime component."""
+        """一批事件一个短事务（调用方为 StoreWriter 批次）。
+
+        幂等保护（TASK-05 P0-5，ISSUE-QD-010）：同 event_id 同内容的合法重投只存
+        一次、不报错（writer 失败重试会重投同一批）。B03.02：同 ID 异内容 = 事件
+        身份冲突，读回规范化内容比对后抛 EventIdentityConflict（不静默丢弃/覆盖）；
+        比对先于写入，冲突即整批不落（不留半截状态）。
+        """
         if not events:
             return
         with self.transaction():
@@ -82,7 +88,10 @@ class EventStoreMixin:
             )
 
     def events_page(self, run_id, *, after_seq=0, limit=200, inclusive=False):
-        """Vastar runtime component."""
+        """B40：按 Run 的事件时间线只读分页（回放/追踪视图专用；不投射、不写）。
+
+        HM-155（TASK-82）：inclusive=True 用包含语义（seq>=?）——仅供**首页起点**
+        （真实 seq=0 不漏）；默认排他（seq>?）——后续翻页游标语义不变。"""
         op = ">=" if inclusive else ">"
         with self._lock:
             rows = self._conn.execute(

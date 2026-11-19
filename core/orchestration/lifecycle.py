@@ -1,4 +1,25 @@
-"""Vastar runtime component."""
+"""B46 父子生命周期与交互编排（TASK-2026-10-09-89）：取消树 / watchdog / 可重试判定。
+
+Interface（宿主侧，**不对模型暴露**）：
+
+- ``cancel_tree()`` —— B46.01 取消树：**① 先停止新派发**（`ChildSupervisor.close_dispatch()`，
+  后续 delegate 一律 `blocked: worker_dispatch_closed` 且不触达 provider）→
+  **② 再传播取消**到在途子项（`detach` 过的独立后台子项**不连带**）→
+  **③ 等终态落定**（worker 返回前操作已 drain，B44/B45 路径落终态事实）→
+  **④ 核实**：仍有未落定子项则显式 RuntimeError（不谎报）；返回核实表。
+  已 committed/accepted 的历史**不改写**（B44 计划层不可变校验本就拦截）。
+  挂接 broker 时，取消集合的问题立即过期，独立所有者的问题保留。
+- ``detach(child_id, owner=...)`` —— 独立后台任务**显式**转移所有权（父取消不连带）。
+- ``watchdog()`` —— B46.03：按**实际进展**区分 waiting/unresponsive（最近一次事件距今
+  ≤ `silence_after_s` 为 waiting，否则 unresponsive；已终态子项不参评）。
+- ``retryable(child_id)`` —— **重试只针对可重试失败**：结果 failed/incomplete 且
+  错误事件携带 `retryable=True` 且 category ∈ {transient, timeout}；校验打回 /
+  准入被拒 / 取消一律 False（不盲目重试）。
+- ``parent_verdict(results)`` —— 父任务**不得**因某子成功即判完成：全部 completed 才
+  'completed'，有成有败 → 'partial'，全灭 → 'failed'。
+- ``collect_questions(results=None)`` —— 把子结果里 `needs_input:` blocker 聚合进
+  broker（B46.02 的接入点；等待即释放槽位 = 子 run 以 incomplete 收尾、槽位随结算释放）。
+"""
 import time
 
 from core.orchestration.children import ChildSupervisor

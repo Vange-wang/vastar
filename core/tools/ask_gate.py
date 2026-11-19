@@ -1,4 +1,18 @@
-"""Vastar runtime component."""
+"""询问交互闸门（TASK-24 ①B / QD-115/116/129）：ASK 判定的用户确认通道。
+
+- 选项固定：1 允许 / 2 拒绝 / 3 本会话内"这类动作"都允许；"3"的记忆键 =
+  **显式授权上下文六元组**（B08：会话 × 项目 × actor × 动作 × 资源范围 × 策略修订；
+  原为进程级全局两字段「动作 × in_root」＝ F08 根因——新会话会继承旧会话许可）。
+  跨 Agent 权限交集留 B42/B46（本批仅在 actor_id 字段上预留，不启动多 Agent）；
+- 超时（tools.ask_timeout_s，默认 60s）→ DENY（ask_timeout）；询问不得阻塞整个 Run；
+- 输入复用既有 prompt_toolkit 输入会话：REPL 把 pending 期间的输入路由到 resolve_input
+  （不新建输入通道，QD-129）；询问态 Ctrl+C = 拒绝（user_cancel，QD-115）；
+- **并发/竞态显式处理（B08.02）**：pending 询问绑定请求 ID ＋ 目标操作 ＋ 会话；
+  会话切换（rotate_session，由 /new 的既有生命周期点接线）后，**迟到的批准不授权**
+  （session_changed 拒绝、不产生授权记录）；新询问到达而旧询问仍挂起 → 旧询问按
+  superseded 显式拒绝（不静默吞）；
+- 落屏由执行层经 tool.ask 事件走既有渲染合批（不另开路径，R9）——本模块不直接碰终端。
+"""
 
 from __future__ import annotations
 
@@ -171,7 +185,7 @@ class AskGate:
         return "answered"
 
     def cancel(self) -> bool:
-        """Vastar runtime component."""
+        """Ctrl+C 语义（QD-115）：询问态 = 拒绝。返回 True 表示确有 pending 被拒。"""
         if not self.has_pending() or self._future is None:
             return False
         self._resolve(AskAnswer(False, "user_cancel"))

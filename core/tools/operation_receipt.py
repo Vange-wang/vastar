@@ -8,7 +8,10 @@ from core.tools.sensitive_result import protected_result
 MAX_RESULT_BYTES = 64 * 1024
 
 def _friendly_failure_reason(exc: BaseException, resolved: Path | None) -> str:
-    """Vastar runtime component."""
+    """常见系统错误 → 语义化文案（TASK-26 交付项 A / ISSUE-HM-053）。
+
+    用户可见文案不得出现裸 WinError/traceback；原始 errno/异常类由调用方进审计。
+    """
     if isinstance(exc, PermissionError):
         return (f"无访问权限：{resolved or '目标路径'}"
                 "（该目录可能属于其他账户或受系统保护）")
@@ -19,7 +22,17 @@ def _friendly_failure_reason(exc: BaseException, resolved: Path | None) -> str:
 
 @dataclass
 class ToolOutcome:
-    """Vastar runtime component."""
+    """一次工具调用的终态（事件 payload 与审计共用）。
+
+    B10 统一结果形态（TASK-45）：
+    - origin：结果来源（谁导致的、在哪个阶段）——registry_gate / permission_gate /
+      tool_param / tool_runtime / timeout / user_cancel / resource_busy / backup_failed /
+      ask_gate / toctou_recheck；executed 为空串；
+    - contract：结构化结果契约（键按工具 effect 固定）——
+      读 `read_window`={start_line,end_line,total_lines,total_bytes,read_bytes,complete}；
+      写 `write_proof`={expected_hash,actual_hash,match,preexisting_hash}；
+      删 `recovery`={credential,original_path,retention}。
+    """
 
     name: str
     status: str            # executed / rejected / failed / cancelled / timeout / unknown
@@ -28,7 +41,7 @@ class ToolOutcome:
     duration_ms: int = 0
     truncated_bytes: int = 0
     args_summary: str = ""
-    audit: dict = field(default_factory=dict)   
+    audit: dict = field(default_factory=dict)   # 权限判定/批准来源/备份路径等（TASK-24）
     redact_result_preview: bool = False   # E-6：凭据类读取的结果预览不落审计（内容不落库）
     origin: str = ""       # B10：结果来源（阶段）；executed 为 ""
     contract: dict = field(default_factory=dict)   # B10：read_window / write_proof / recovery

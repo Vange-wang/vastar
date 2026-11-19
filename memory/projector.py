@@ -86,7 +86,7 @@ class EventProjector:
             self._store.save_context_snapshot(f"{run_id}-ctx", run_id, p["context_snapshot"])
         self._content.pop(run_id, None)
         self._reasoning.pop(run_id, None)
-        
+        # KM-11（QD-178 三处真无清理键）：Run 结束即清理，防跨 Run 线性增长——
         # ① _answer_ids（答案已落地）；② _meta 只保留最近一个 Run（读取方语义 =
         # "最近一次 Run" 的 latencies/context 快照，见 latency_of/context_record_of）；
         # ③ _attempt_error 的 run:{id} 回退键（无 attempt_id 的 Run 级错误，此处为其唯一清理点）。

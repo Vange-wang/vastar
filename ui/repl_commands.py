@@ -50,10 +50,10 @@ class ReplCommands:
             if message:
                 self._renderer.render_note(message)
         elif cmd == "/continue":
-
+            # TASK-34 §C(2)：手动续写上一条被截断的回答（撞顶/超时）
             _handle_continue(self._renderer, coord)
         elif cmd == "/compact":
-
+            # 基线 §7 / R13（TASK-11）：显式压缩三步（生成→审批→回滚）；原文无损；
             # 忙时拒绝（/new 同口径）；摘要为本地确定性拼装（零模型请求）。
             _handle_compact(self._renderer, coord, arg)
         elif cmd == "/skill":
@@ -73,7 +73,7 @@ def _handle_mode(ui, arg):
 
 
 def _handle_model(ui, arg):
-
+    # 裁定（2026-09-20-model-switch-and-banner_hm §二.2）+ TASK-03 P0-B 序号制：
     # 无参按固定顺序列出 "N) provider/model" 并标注当前；带参支持序号 /
     # 裸 model-id / provider/model 三种写法（序号制为主，名字向后兼容）。
     if not arg:
@@ -103,8 +103,8 @@ async def _handle_extension(ui, cmd, arg):
     elif cmd == '/task':
         await _handle_task(ui, arg)
     elif cmd == '/team':
-        from ui.team_commands import handle_team
-        handle_team(ui, arg)
+        from ui.team_entry import handle_team_entry
+        await handle_team_entry(ui, arg)
     elif cmd == '/trace':
         from ui.trace_commands import handle_trace
         handle_trace(ui, arg)
@@ -116,14 +116,15 @@ async def _handle_extension(ui, cmd, arg):
 async def _handle_task(ui, arg):
     import json
 
+    from core.artifacts import ArtifactError
     from core.harness.task_commands import task_command
     try:
         result = await task_command(ui._coordinator, arg)
         ui._renderer.render_note(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2))
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, OSError, ArtifactError) as exc:
         ui._renderer.render_note(f"Task：{exc}")
 def _handle_compact(renderer, coord, arg: str) -> None:
-    """Vastar runtime component."""
+    """/compact 分派（TASK-11）：无参 = 生成并预览；ok/drop/rollback = 审批闭环动作。"""
     if coord.is_busy():
         renderer.render_note("正在回答中，/compact 稍后再试")
         return
@@ -154,7 +155,7 @@ def _handle_compact(renderer, coord, arg: str) -> None:
 
 
 def _handle_continue(renderer, coord) -> None:
-    """Vastar runtime component."""
+    """/continue 分派（TASK-34 §C(2)）：忙时拒绝；空闲交协调器续写上一回答。"""
     if coord.is_busy():
         renderer.render_note("正在回答中，/continue 稍后再试")
         return

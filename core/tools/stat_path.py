@@ -1,4 +1,8 @@
-"""Vastar runtime component."""
+"""stat_path：存在性 / 类型 / 大小 / mtime（TASK-24 读增强组；R25）。只读。
+
+不存在的路径是**合法答案**（明确回显"不存在"，不报错）——供模型探测后再决定动作。
+权限判定不在本文件（执行层收口，机械 grep 门）。
+"""
 
 from __future__ import annotations
 

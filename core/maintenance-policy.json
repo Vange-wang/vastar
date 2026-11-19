@@ -1,0 +1,1 @@
+{"log_days":30,"log_bytes":536870912,"log_segments":7,"artifact_count":200,"reference_days":90,"backup_count":7,"artifact_warn_bytes":1073741824,"database_warn_bytes":1073741824,"backup_warn_bytes":4294967296}

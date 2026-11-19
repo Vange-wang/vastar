@@ -120,5 +120,7 @@ class OperationLedger:
                                          audit={"operation_id": operation_id, "reconcile": result}))
         state = result["status"]
         if operation["state"] != "committed":
+            if state == 'committed' and 'observed' in result['evidence']:
+                operation['facts']['after'] = result['evidence']['observed']
             self.store.operation_finish(operation_id, state, receipt, operation["facts"], reconciliation=result)
         return result

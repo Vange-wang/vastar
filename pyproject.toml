@@ -1,0 +1,34 @@
+[project]
+name = "vastar"
+version = "0.2.0"
+description = "Vastar — personal general-purpose agent (Vange)"
+requires-python = ">=3.11"
+dependencies = [
+    "prompt_toolkit==3.0.53", # TUI 路线 A（行式 REPL），基线要求版本钉死；零补丁
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["_qd_*", "_hm_*", "_zc_*", "_km_*"]   # 角色过程性临时脚本不进 lint
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

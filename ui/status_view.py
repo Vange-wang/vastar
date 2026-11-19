@@ -1,4 +1,11 @@
-"""Vastar runtime component."""
+"""/status 组装（B40 职责拆分自 ui/repl.py 移出；B40.01/03 扩展展示面）。
+
+UI 只消费状态（TASK-2026-10-05-77 红线 2）：本模块全部只读——不触碰授权、
+不触发执行；数据一律来自协调器与仓储的既有口径。**注意**：QuestionService.pending
+与 TaskRuntime.snapshot 内部有写入（过期 UPDATE / INSERT OR IGNORE），/status 不调
+它们，改走只读直读（见 _waiting_count / _task_snapshot_row）。
+术语降噪（B40.03）：一律中文人话标签，内部代号只出现在括号备注里。
+"""
 import time
 
 from core.run_progress import progress_lines
@@ -6,7 +13,7 @@ from ui.usage_view import run_usage
 
 
 def _last_finish_note(last) -> str:
-    """Vastar runtime component."""
+    """/status 的上一轮 finish 文案（TASK-34/QD-276 第二落点：与结束行同口径）。"""
     if last.status == "incomplete" and last.finish_reason == "output_limit":
         return "已达单次输出上限，可 /continue 续写"
     if last.status == "incomplete" and last.finish_reason == "run_total_timeout":
@@ -16,7 +23,13 @@ def _last_finish_note(last) -> str:
 
 def _status_lines(coord, registry, permission_mode: str | None, *,
                   startup_facts: str = "") -> list[str]:
-    """Vastar runtime component."""
+    """组装 /status 文本（模块级——V6 类红线；TASK-24 增权限模式展示）。
+
+    含：会话/模式/队列/存储 + 模型/输出上限/忙碌/上一轮 + 工具启用数/最近调用/权限模式 +
+    本轮模型调用与工具调用次数（成本可观测，Spec §6）。
+    TASK-116 §2：启动预检段不再显示在启动页，改由本函数挂载（startup_facts 为启动时
+    已计算的快照文本，/status 不重跑预检、不产生副作用）；Output 诊断同挪入。
+    """
     last = coord.last_result
     lines = [
         f"会话 {coord.session_id} · 模式 {coord.mode} · 队列 {coord.has_draft_queue()} 条"
@@ -95,8 +108,8 @@ def _section_task(coord) -> list[str]:
         lines.append("动作：" + " · ".join(f"{label.get(k, k)} {v}" for k, v in sorted(counts.items())))
     snap = _task_snapshot_row(store, task["task_id"])
     if snap and snap.get("recovery_error"):
-
-
+        # HM-157（TASK-82）：无检查点时 /task resume 必败（缺已提交检查点）——按实际可续
+        # 条件给提示，与 _section_next_step 的 HM-150 出路口径一致，不混入必败动作。
         if store.checkpoint_latest(task["task_id"]) is None:
             lines.append(f"恢复异常：{snap['recovery_error']}（无检查点，不可恢复；"
                          "/new 开新会话）")
@@ -191,12 +204,12 @@ def _section_next_step(coord) -> list[str]:
     hints = []
     last = coord.last_result
     if last is not None:
-
+        # HM-157（TASK-82）：提示与实际可续条件一致（continue_last：incomplete ∧ partial）——
         # needs_input 等 partial=False 的未完成态下 /continue 必败，不混入提示。
         if last.status == "incomplete" and getattr(last, "partial", False):
             hints.append("/continue 续写")
         elif last.status == "failed":
-
+            # HM-142（TASK-78）：提示必须可操作——直接带最近运行 ID，无需事先知道
             run_id = getattr(last, "run_id", None)
             hints.append(f"/retry 重问 · /trace run {run_id} 定位失败" if run_id
                          else "/retry 重问")
@@ -210,7 +223,7 @@ def _section_next_step(coord) -> list[str]:
         if task:
             snap = _task_snapshot_row(store, task["task_id"])
             if snap and snap.get("recovery_error"):
-
+                # HM-150：无检查点时 /task resume 必败——提示必须给出路，不把用户卡死
                 if store.checkpoint_latest(task["task_id"]) is None:
                     hints.append("现场无检查点、不可恢复：/new 开新会话"
                                  "（任务留在原会话，可 /task attach 回挂）")

@@ -19,7 +19,7 @@ async def dispatch_result(emit, s, name, result, attempt_id, attempt_index):
             **result_audit, **audit,
             "source": "model",
         }, attempt_id, attempt_index)
-        
+        # KM-09：截断对模型侧显式标记（事件层字段不动——V2 禁静默对模型同样适用）
         # B16：有产物库标记块时用它（含 artifact_ref + next_cursor），否则沿用字节数标记
         if result.truncated_bytes:
             note = (result.audit or {}).get("large_output")

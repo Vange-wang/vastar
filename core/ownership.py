@@ -29,7 +29,10 @@ def atomic_json(path, value):
 
 
 class Ownership:
-    def __init__(self, path, *, clock=time.time, interval=1.0):
+    def __init__(self, path, *, clock=time.time, interval=1.0, heartbeat_ttl=HEARTBEAT_TTL):
+        if type(heartbeat_ttl) not in (int, float) or not math.isfinite(heartbeat_ttl) or heartbeat_ttl < 0:
+            raise OwnershipError("runtime.ownership_heartbeat_ttl_s 须为有限非负秒数")
+        self.heartbeat_ttl = heartbeat_ttl
         self.path = path.resolve()
         if self.path.exists() and self.path.stat().st_nlink > 1:
             raise OwnershipError("数据库存在硬链接；无法唯一锁定归属，拒绝启动")
@@ -76,7 +79,7 @@ class Ownership:
                 raise ValueError("invalid ownership fields")
         except (ValueError, KeyError, TypeError) as exc:
             raise OwnershipError("所有权凭据损坏/路径不符；拒绝自动接管，请保留现场") from exc
-        if previous["state"] == "active" and age <= HEARTBEAT_TTL:
+        if previous["state"] == "active" and self.heartbeat_ttl > 0 and age <= self.heartbeat_ttl:
             raise OwnershipError("锁已释放但 heartbeat 仍新鲜；须等心跳过期再核定接管")
         self.previous = previous
 

@@ -1,4 +1,10 @@
-"""Vastar runtime component."""
+"""search_text：文件内容关键词搜索（TASK-24 读增强组；R25 / v1.9 §①D2 先搜后读）。
+
+返回 `文件:行号:内容`，行号 **1-based**，与 read_file 的 start_line **同口径**
+（行 = "\\n" 分隔、尾随换行不另计一行）→ 搜到的行号可直接喂 read_file 精确读区间。
+只读；跳过保护路径（.git/.venv/受保护文件名，由执行层注入 skip 过滤器）并显式计数；
+二进制/超 1MB 文件跳过并计数（禁静默）。权限判定不在本文件（执行层收口）。
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,7 @@
-"""Vastar runtime component."""
+"""artifacts 元数据仓储（B16：DB 只保元数据，内容在 <data_dir>/artifacts/ 受管目录）。
+
+风格对齐 RunRepository：写走 self.transaction()、读走 self._lock（KM-10）、时钟 self._now()。
+"""
 from __future__ import annotations
 
 
@@ -17,7 +20,7 @@ class ArtifactRepository:
                  meta["created_at"]))
 
     def get_artifact(self, artifact_id: str, version: int) -> dict | None:
-        with self._lock:   
+        with self._lock:   # KM-10：读路径与写路径同锁
             row = self._conn.execute(
                 "SELECT * FROM artifacts WHERE artifact_id=? AND version=?",
                 (artifact_id, version)).fetchone()

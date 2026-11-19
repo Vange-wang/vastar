@@ -29,7 +29,7 @@ class RunRepository:
 
 
     def input_message_id_of(self, run_id: str) -> str | None:
-        """Vastar runtime component."""
+        """TASK-34：/continue 续写需引用被续 Run 的输入消息 id（不回读 result_json）。"""
         with self._lock:
             row = self._conn.execute(
                 "SELECT input_message_id FROM runs WHERE run_id=?", (run_id,),
@@ -52,7 +52,7 @@ class RunRepository:
 
 
     def non_terminal_runs(self) -> list[str]:
-        with self._lock:   
+        with self._lock:   # KM-10：读路径与写路径同锁（必要性见 _lock 定义处注释）
             rows = self._conn.execute(
                 "SELECT run_id FROM runs WHERE terminal_state IS NULL"
             ).fetchall()

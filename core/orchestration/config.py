@@ -1,4 +1,4 @@
-"""Vastar runtime component."""
+"""A23 / TASK-85 pilot configuration. Missing block remains disabled."""
 import math
 from dataclasses import dataclass, field
 

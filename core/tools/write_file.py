@@ -1,4 +1,11 @@
-"""Vastar runtime component."""
+"""write_file：新建 / 覆盖整个文件（TASK-24 写操作组；R25）。
+
+权限判定不在本文件（执行层收口，机械 grep 门）；本文件只向执行层提供**事实**
+（OpPlan：目标/字节/是否覆盖），判定与备份触发都在执行层。写入走 safety.atomic_write_text
+（原子，防半截）；覆盖前备份由执行层在询问前完成（备份失败已拒绝写入）。
+B10（TASK-45）：写后回读校验——结果契约带预期 hash + 实际新 hash（write_proof），
+不一致显式报错（禁静默）。
+"""
 
 from __future__ import annotations
 

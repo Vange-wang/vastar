@@ -1,4 +1,12 @@
-"""Vastar runtime component."""
+"""TASK-116 统一主题与几何原语：蓝＋黄色板、真实终端宽度、渐变长线、消息块框线。
+
+颜色纪律：全仓 UI 颜色只在本模块与 renderer 的 STYLE_KEYS 引用里出现，事件代码不写死颜色。
+宽度纪律（§七 半宽根因修复）：以**真实控制台尺寸**为准——`shutil.get_terminal_size()`
+会**优先读 `COLUMNS`/`LINES` 环境变量**，实测可让 100 列终端按 50 列折行；本模块改为
+`os.get_terminal_size` 直连控制台句柄，环境变量不再能覆盖真实宽度。
+渐变纪律（§五 红线）：真彩可用 → 黄→蓝 RGB 渐变；不可用 → **纯黄**（不得花屏）；
+`NO_COLOR`/`TERM=dumb` → 完全无色纯文本。
+"""
 from __future__ import annotations
 
 import os
@@ -14,13 +22,13 @@ DIM_PROCESS = "\x1b[2m\x1b[38;5;75m"   # 降亮蓝：中间过程（工具/技�
 DIM_STATUS = "\x1b[2m\x1b[38;5;60m" + FRAME_BG  # 暗灰蓝：紧随消息的提示让位
 YELLOW = "\x1b[38;5;220m"              # 黄：Vastar 主题/回退纯黄长线
 BRIGHT_YELLOW = "\x1b[1m\x1b[38;5;226m"  # 亮黄：Vastar 消息块框线
-DIM_CONTENT = ""
+DIM_CONTENT = ""                       # 默认前景正文（HM-181 v1.3：白色，不带 dim）
 PROMPT_CONTENT_STYLE = ""              # 默认前景：输入框正文同为白色，不写黄系 ANSI
 WARNING = "\x1b[38;5;214m"             # 橙黄：警告（语义色保留）
 ERROR = "\x1b[38;5;203m"               # 红：错误（语义色保留）
 
-DEFAULT_TERMINAL_WIDTH = 80
-MIN_TERMINAL_WIDTH = 20
+DEFAULT_TERMINAL_WIDTH = 80   # 无终端环境时的回退宽度（KM-22）
+MIN_TERMINAL_WIDTH = 20       # 终端宽度下限（防极窄窗口，KM-22）
 
 GRADIENT_YELLOW = (255, 208, 64)   # 渐变起点＝黄
 GRADIENT_BLUE = (72, 152, 248)     # 渐变终点＝蓝
