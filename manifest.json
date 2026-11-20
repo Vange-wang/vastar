@@ -3,7 +3,7 @@
   "digest_method": "SHA-256 of UTF-8 compact JSON sorted path-to-SHA256 map; manifest excludes itself.",
   "files": {
     "LICENSE": "84bedf459400a9f9998eb443908d99ec7c5fee1843e5a2f13c9ee7a09f700031",
-    "README.md": "db7188a794f62879ac938d13feebeb50015c70954d5702aa0c4a76a4847ea6b9",
+    "README.md": "4a9f37971b19f13674a2548891f9b1c7d75402d76150f796e67708e11e8bd874",
     "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agents/definition.py": "f179af21abda7587f0879b42de08778359d46ce08b6c4cd7a9a3b046371dd8ce",
     "config/settings.example.json": "67a47c1b944173de50c971022936404928c2b94409979cfd7b2d5c27cf4c0876",
@@ -424,7 +424,7 @@
     "Filesystem timestamps and permissions are outside the content digest.",
     "Doctor timestamps, absolute paths and machine-dependent diagnostics are recorded outside the snapshot."
   ],
-  "sha256": "65148630a800eb6df22a653415109b42a646f2c90406bb96ee3645ce276837e1",
-  "source_commit": "73c1ad0821f7e1b99e9afb6d1a9324222ef318d3",
+  "sha256": "8bec8dafaf7cb646e04a99db026459189a2f46a70663083303cbc7b7d0718a72",
+  "source_commit": "eb6f490ce9205cf0c0ec36ea8bdebc600bc000f7",
   "target": "https://github.com/Vange-wang/vastar"
 }
