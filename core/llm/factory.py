@@ -69,11 +69,6 @@ def build_provider_spec(llm_cfg: dict, provider_name: str, context_cfg: dict,
             code=ErrorCode.PARAM_ERROR, category=ErrorCategory.PARAM,
             message=f"provider 不在注册表中：{provider_name}")
     block = registry[provider_name]
-    api_key = os.environ.get(block["api_key_env"], "").strip()
-    if not api_key:
-        raise VastarError(
-            code=ErrorCode.AUTH_ERROR, category=ErrorCategory.AUTH,
-            message=f"环境变量 {block['api_key_env']} 未设置，无法装配 provider {provider_name}")
     base_url = os.environ.get(block["base_url_env"], "").strip() or block["base_url_default"]
     chosen_model = model or (
         llm_cfg["model"] if provider_name == llm_cfg["provider"] else block["models"][0])
@@ -95,6 +90,11 @@ def build_provider_spec(llm_cfg: dict, provider_name: str, context_cfg: dict,
                          f"（第三方 OpenAI 兼容模型可在 llm.providers.{provider_name} "
                          f"加 \"protocol\": \"openai_compatible\"；允许取值："
                          f"{_PROTOCOL_ALLOWED_TEXT}）"))
+    api_key = os.environ.get(block["api_key_env"], "").strip()
+    if not api_key:
+        raise VastarError(
+            code=ErrorCode.AUTH_ERROR, category=ErrorCategory.AUTH,
+            message=f"环境变量 {block['api_key_env']} 未设置，无法装配 provider {provider_name}")
     provider = cls(provider_name=provider_name, base_url=base_url, api_key=api_key)
     profile = BudgetProfile(
         provider=provider_name,
@@ -117,12 +117,38 @@ def build_provider_spec(llm_cfg: dict, provider_name: str, context_cfg: dict,
 
 
 def build_primary_and_fallback(
-    llm_cfg: dict, context_cfg: dict,
+    llm_cfg: dict, context_cfg: dict, *, notices: list[str] | None = None,
 ) -> tuple[ProviderSpec, ProviderSpec | None]:
-    primary_name = llm_cfg["provider"]
-    primary = build_provider_spec(llm_cfg, primary_name, context_cfg)
-    fallback: ProviderSpec | None = None
-    fallback_name = llm_cfg.get("fallback_provider")
-    if fallback_name and fallback_name in llm_cfg["providers"] and fallback_name != primary_name:
-        fallback = build_provider_spec(llm_cfg, fallback_name, context_cfg)
-    return primary, fallback
+    notes = notices if notices is not None else []
+    preferred = llm_cfg["provider"]
+    standby = llm_cfg.get("fallback_provider")
+    specs = []
+    for name in dict.fromkeys([preferred, standby, *llm_cfg["providers"]]):
+        if not name:
+            continue
+        block = llm_cfg["providers"].get(name)
+        if block is None:
+            notes.append(f"{name} 配置错误：provider 不在注册表中")
+            continue
+        if not isinstance(block, dict) or not isinstance(block.get("api_key_env"), str) or not block["api_key_env"].strip():
+            notes.append(f"{name} 配置错误：缺少有效的 api_key_env")
+            continue
+        if specs and name != standby:
+            if not os.environ.get(block["api_key_env"], "").strip():
+                notes.append(f"{name} 未配置（环境变量 {block['api_key_env']} 未设置）")
+            continue
+        try:
+            specs.append(build_provider_spec(llm_cfg, name, context_cfg))
+        except VastarError as exc:
+            state = "未配置" if exc.code == ErrorCode.AUTH_ERROR else "配置错误"
+            notes.append(f"{name} {state}：{exc.message}")
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            notes.append(f"{name} 配置错误：请检查模型、上下文及输出参数（{type(exc).__name__}）")
+    if not specs:
+        raise VastarError(code=ErrorCode.AUTH_ERROR, category=ErrorCategory.AUTH,
+                          message="没有可用的模型提供方：" + "；".join(notes))
+    if specs[0].name != preferred:
+        notes.append(f"当前使用 {specs[0].name}（默认 {preferred} 不可用）")
+    if standby and len(specs) == 1:
+        notes.append("无 fallback 可用")
+    return specs[0], specs[1] if len(specs) > 1 else None

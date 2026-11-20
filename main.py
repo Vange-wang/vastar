@@ -83,7 +83,8 @@ def _assemble_app(args, launch, store):
     agent_def = load_agent(launch.config_path, raw=raw)
     prompt_bundle = build_prompt(raw["prompt"], BASE_DIR)
 
-    primary, fallback = build_primary_and_fallback(raw["llm"], raw["context"])
+    provider_notices: list[str] = []
+    primary, fallback = build_primary_and_fallback(raw["llm"], raw["context"], notices=provider_notices)
     wait_budget = float(primary.timeouts.get("retry_wait_budget_s", 30))
     retry_policy = RetryPolicy(
         fallback_provider=fallback.name if fallback else None,
@@ -134,7 +135,7 @@ def _assemble_app(args, launch, store):
     return {
         "coordinator": coordinator, "renderer": renderer, "store": store, "writer": writer,
         "agent_def": agent_def, "primary": primary, "fallback": fallback,
-        "recovered_count": marked, "raw": raw,
+        "recovered_count": marked, "raw": raw, "provider_notices": provider_notices,
         "tools": tools_context,   # TASK-16：启动路径所需键显式暴露（不穿透 runtime 私有属性）
         "skills": skills_context,   # B11：技能上下文（/status 与测试同口径的公开键）
         "artifacts": artifacts,       # B16：产物库（测试与排障的公开键）
@@ -246,6 +247,7 @@ async def _serve_ui(app: dict, *, continue_session: bool) -> None:
     renderer.render_welcome(welcome_text())
     sandbox = getattr(app["tools"], "execution_sandbox", None)
     startup_facts = sandbox.preflight_text() if sandbox is not None else ""
+    startup_facts = "\n".join(filter(None, [startup_facts, *app.get("provider_notices", [])]))
     if app["recovered_count"]:
         renderer.render_note(
             f"崩溃恢复：{app['recovered_count']} 个未结束 Run 已标记 INTERRUPTED（不自动重跑）")
@@ -293,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
                                  "config_sources": launch.sources,
                                  "env_file": str(launch.env_file)}))
             return 0
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            print("交互模式需要终端输入和输出，请在真实终端运行。", file=sys.stderr)
+            return 2
         start_startup(argv if argv is not None else sys.argv[1:])
         try:
             app = build_app(args)

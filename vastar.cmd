@@ -15,7 +15,9 @@ rem UTF-8 on the Python side (console codepage is left untouched)
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 
-if exist "%VASTAR_HOME%\.venv\Scripts\python.exe" (
+if exist "%VASTAR_HOME%\runtime\python\python.exe" (
+  set "VASTAR_PY=%VASTAR_HOME%\runtime\python\python.exe"
+) else if exist "%VASTAR_HOME%\.venv\Scripts\python.exe" (
   set "VASTAR_PY=%VASTAR_HOME%\.venv\Scripts\python.exe"
 ) else (
   set "VASTAR_PY=python"

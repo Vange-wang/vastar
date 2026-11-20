@@ -10,7 +10,8 @@ from ui.startup_screen import start_startup, stop_startup  # noqa: E402
 
 
 def launch():
-    start_startup(sys.argv[1:])
+    if sys.stdin.isatty():
+        start_startup(sys.argv[1:])
     try:
         from main import main
         return main()

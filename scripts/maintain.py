@@ -14,8 +14,21 @@ from core.maintenance_scan import ScanBudget
 from core.maintenance_snapshot import restore, safe, snapshot
 
 
+def restore_result(archive, dest):
+    import zipfile
+
+    with zipfile.ZipFile(archive) as snapshot_file:
+        db_name = json.loads(snapshot_file.read("manifest.json"))["db"]
+    restored = restore(archive, dest)
+    return {
+        "restored": str(restored),
+        "database": str(restored / db_name),
+        "next": "此目录本身就是恢复的数据目录。先在独立副本核验；默认安装的库在 memory/ 下，切换前停机并备份，保留现有库。",
+    }
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog="restore 将库直接恢复到新目录根（如 X/history.db），X 是恢复的数据目录。")
     parser.add_argument("action", choices=["capacity", "prune", "backup", "restore", "preflight"])
     for name, default in (
         ("db", "memory/history.db"),
@@ -75,7 +88,7 @@ def main(argv=None):
         if not args.dest or not args.archive:
             parser.error("restore requires --archive and --dest")
         result = (
-            {"restored": str(restore(args.archive, safe(args.dest)))}
+            restore_result(args.archive, safe(args.dest))
             if args.confirm
             else {"preview_restore": str(args.dest), "would_refuse": args.dest.exists()}
         )

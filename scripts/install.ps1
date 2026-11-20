@@ -50,7 +50,7 @@ if(Test-Path -LiteralPath $releaseManifest){
     if($release.format -ne 1 -or !$release.files.Contains('main.py')){throw 'Invalid public snapshot manifest'}
     $files=@($release.files.Keys | Where-Object {
         $_ -cmatch '^(?:agents|core|ui|memory|prompts|skills|deploy/searxng)/[A-Za-z0-9_./-]+$' -or
-        $_ -cin @('main.py','pyproject.toml','scripts/maintain.py','config/settings.example.json') -or
+        $_ -cin @('main.py','vastar.cmd','scripts/start_vastar.py','pyproject.toml','scripts/maintain.py','config/settings.example.json') -or
         $_ -cmatch '^scripts/doctor(?:_[a-z]+)?[.]py$'
     })
     foreach($file in $files){
@@ -60,7 +60,7 @@ if(Test-Path -LiteralPath $releaseManifest){
         }
     }
 }else{
-$files=@(git -C $source ls-files -- agents core memory ui tools prompts skills main.py pyproject.toml 'scripts/doctor*.py' scripts/maintain.py config/settings.example.json deploy/searxng)
+$files=@(git -C $source ls-files -- agents core memory ui tools prompts skills main.py vastar.cmd scripts/start_vastar.py pyproject.toml 'scripts/doctor*.py' scripts/maintain.py config/settings.example.json deploy/searxng)
 if($LASTEXITCODE -ne 0 -or !$files){throw 'Run installer from a Git checkout with Git available'}
 }
 foreach($rel in $files){
@@ -117,5 +117,6 @@ if(Test-Path $browserDir){foreach($file in Get-ChildItem $browserDir -File -Recu
     $assets+=@{path=$file.FullName;version=$file.VersionInfo.ProductVersion;sha256=(Get-FileHash $file.FullName).Hash}
 }}
 $tmp=Join-Path $runtime 'assets.tmp';ConvertTo-Json -InputObject $assets|Set-Content $tmp -Encoding utf8;[IO.File]::Move($tmp,(Join-Path $runtime 'optional-assets.json'),$true)
-Write-Output "Ready: $python -B $root/scripts/doctor.py"
+$launcher=(Join-Path $root 'vastar.cmd').Replace("'", "''")
+Write-Output "Ready: & '$launcher'"
 }finally{$lease.Dispose()}

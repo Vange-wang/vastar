@@ -3,7 +3,7 @@
   "digest_method": "SHA-256 of UTF-8 compact JSON sorted path-to-SHA256 map; manifest excludes itself.",
   "files": {
     "LICENSE": "84bedf459400a9f9998eb443908d99ec7c5fee1843e5a2f13c9ee7a09f700031",
-    "README.md": "236c6f56b35115d55ced492de1d8f6d8bd57732c0cd006632b2817a0f25c0965",
+    "README.md": "db7188a794f62879ac938d13feebeb50015c70954d5702aa0c4a76a4847ea6b9",
     "agents/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agents/definition.py": "f179af21abda7587f0879b42de08778359d46ce08b6c4cd7a9a3b046371dd8ce",
     "config/settings.example.json": "67a47c1b944173de50c971022936404928c2b94409979cfd7b2d5c27cf4c0876",
@@ -71,7 +71,7 @@
     "core/llm/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "core/llm/base.py": "a44a5ff74d5e9429dc172911ac2b0e480c8114d25418ce360a1b588434627680",
     "core/llm/capabilities.py": "a203f3001125c05a50140b71134354709cc500339d3c0b728335e05986cae836",
-    "core/llm/factory.py": "1b2102148e42c2540e82bf51b2c74ba33310bd9968bba0f01407cf2c5e54bc7d",
+    "core/llm/factory.py": "4fbaa33120606bed829f18d05f1f1eb96269ce6cd4ee39b07b0069ea0225a5a0",
     "core/llm/final_output.py": "3d5093b79438405f03b6b640660faf896a8c68760416cf7724643fc5e6eaf338",
     "core/llm/http_stream.py": "9edfd7a86536a805de2366992c8c529438a0ed4ca4aef566cf5fb7df2b96f915",
     "core/llm/output_guard.py": "3964277db0261e580612d2da7def139c05673731dabe8ed5835e64f6e9d2a85d",
@@ -284,7 +284,7 @@
     "deploy/searxng/compose.yaml": "1ebdb97fbfb83ae179af7141f183a7860d5e4920842f3c638fe12ed929366d87",
     "deploy/searxng/nginx.conf": "94994ff02cf890accf54cd4f8f6f2e37e12cf942c27cea64c1fa82d6151b5663",
     "deploy/searxng/settings.yml": "d778a88989ec370822df53f909c7587ac68cd49b8cc17041f02e0b53965235f5",
-    "main.py": "03fb3019ed01ad198be010802c1f8a82c32dcc06d3f2ed33ce5a480269ee7ea9",
+    "main.py": "89cfdb650b0f82f95158aef1710600024d77fba0426f62b6a5463afae4f04b23",
     "memory/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "memory/audit.py": "3272f1158a40fc923e54bd528f1205183657a20c1b9dc87c593a17f1dbc67816",
     "memory/compaction.py": "5f06796cef16782aac2b2a5561cea234097de2fbf1d74721e4a4498eef9fafc6",
@@ -356,9 +356,9 @@
     "scripts/doctor_evidence.py": "e397817ae5a88a455d2428c26c9c7de26b7ecd6d56490f94985bb12b36e3fa53",
     "scripts/doctor_online.py": "a3965d3a75056973c9c77045263580cde3eb252de92b7701119576e41725001e",
     "scripts/install-lock.json": "a7d1b7055f775d522645b40e7fca12b5bb4ffdb46abe6c89610dd40465d09880",
-    "scripts/install.ps1": "5ad2c59ad8a518e33b888b3b5dbc8ac0a6cd903e0a6bb89642bd1e3e04d52dd7",
-    "scripts/maintain.py": "1464141de23713dcf9d9ed9ecc308b6db2452762d4f767ceff946888604a34a6",
-    "scripts/start_vastar.py": "87a98b4189a746a549154d7bed80bb210797d5b02413a42409c0e100a209ade8",
+    "scripts/install.ps1": "510f962da41bae1298209273ba350efa92d7db59cf6c583884fd768c84f35291",
+    "scripts/maintain.py": "3eda44154af4f7887547595be23a3fc0e3f3d0d90b619a138396aaf53f84d38c",
+    "scripts/start_vastar.py": "29561974c7ec81c61414e5d3acafebf23c69674e0767d73685bd12c12e528f88",
     "skills/browser-actions/SKILL.md": "2d783d1f99a40cf15db9a8f44d6ad4fe5b91dd6f903f11bbb7ecdd2f54169b3a",
     "skills/browser-readonly/SKILL.md": "e69ff71cedee45c20a7813da156b17430a662caa28da92e9a7035f33ab194c07",
     "skills/browser-workflow/SKILL.md": "ffd313896358bbca6769853fd4fd86b211f0f826023699849b2167155ef077d7",
@@ -417,14 +417,14 @@
     "ui/trace_commands.py": "30ae40eab51418a0b22747e733e15cd758f48fc75987daf8b9008445aa4dfad8",
     "ui/usage_view.py": "4c7ab408295980e04bb2ced9bb4f334d8d93b4970ab6a95af05a7631ac20608e",
     "ui/welcome.py": "2133adfa895b0c58f3fa539823b403db2dc6ff63055f56980e122e6b433668e0",
-    "vastar.cmd": "520ed105eac7cbb423171ff8b579c75db0a65a2f3eca923e0e6fe181fdd7f9fa"
+    "vastar.cmd": "73ab0666646a90fbca34a043be0d6ffc99599caa8f36fc9e76708e9e960ee0a8"
   },
   "format": 1,
   "nondeterministic": [
     "Filesystem timestamps and permissions are outside the content digest.",
     "Doctor timestamps, absolute paths and machine-dependent diagnostics are recorded outside the snapshot."
   ],
-  "sha256": "5f0bedcab8b0a611d6744f5e632f4705f1907f04fe5e15836c06092305e2993a",
-  "source_commit": "e58641060bf7079e6590dccd27b81980315b3aaf",
+  "sha256": "65148630a800eb6df22a653415109b42a646f2c90406bb96ee3645ce276837e1",
+  "source_commit": "73c1ad0821f7e1b99e9afb6d1a9324222ef318d3",
   "target": "https://github.com/Vange-wang/vastar"
 }
