@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import sys
 import time
@@ -23,6 +24,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from agents.definition import load_agent  # noqa: E402
+from core import one_shot  # noqa: E402
 from core.artifacts import ArtifactStore  # noqa: E402
 from core.continuation import ContinuationRunner  # noqa: E402
 from core.env_facts import format_env_facts  # noqa: E402
@@ -55,6 +57,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-c", "--continue", dest="continue_session", action="store_true",
                         help="续聊最近一次会话")
     parser.add_argument("--config", default=None, help="配置文件路径（默认 VASTAR_CONFIG 或 config/settings.json）")
+    parser.add_argument("--exec", dest="exec_prompt", metavar="PROMPT", help="对项目做单轮只读检查并输出 JSON；- 从标准输入读取")
+    parser.add_argument("--exec-events", action="store_true", help="配合 --exec 逐行输出 JSON 进度与最终回执")
+    parser.add_argument("--output-schema", metavar="FILE", help="配合 --exec 按 UTF-8 JSON schema 核对最终回答")
     parser.add_argument("--verbose-timing", action="store_true",
                         help="退出时打印 startup_to_input_ready 计时（KM-24：注册幽灵开关）")
     add_path_arguments(parser)
@@ -63,7 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def build_app(args: argparse.Namespace):
     """装配全部组件（本地、无网络）；返回运行所需对象集合。"""
-    launch = load_launch_config(args, BASE_DIR)
+    launch = load_launch_config(args, BASE_DIR, opening_store=True)
     validate_task_pricing(launch.raw)
     store = Store(launch.db_path,
                   ownership_heartbeat_ttl=launch.raw.get("runtime", {}).get("ownership_heartbeat_ttl_s", 10),
@@ -94,18 +99,20 @@ def _assemble_app(args, launch, store):
     # 运行时日志（P0-D #2：写失败证据不依赖同一库，落 logs/vastar.log）
     _setup_logging(launch.log_dir)
 
-    marked = store.recover_abandoned_runs()
+    inspection = getattr(args, "exec_prompt", None) is not None
+    marked = 0 if inspection else store.recover_abandoned_runs()
 
     writer = StoreWriter(store)
     # R11：唯一入口 = vastar（inline 主路径）；全屏/输入框实验代码已整体删除
     # （TASK-29 KM-25，Vange 2026-09-26 定案），届时按备忘件重建：
     # collab/decisions/2026-09-26-ui-app-phase-backlog_hm.md
-    renderer = Renderer(
+    renderer = one_shot.ReceiptRenderer(stream_events=args.exec_events) if inspection else Renderer(
         show_reasoning=bool(
             raw["llm"]["providers"][primary.name].get("show_reasoning", True)),
         # TASK-12/HM-034：思考滚动窗口可见行数（默认 5，块高恒 ≤N+3=8 → 折叠必成）
         thinking_visible_lines=int(raw.get("ui", {}).get("thinking_visible_lines", 5)))
-    tools_context, skills_context, artifacts = _assemble_tools(raw, paths, store)
+    assemble_tools = one_shot.inspection_tools if inspection else _assemble_tools
+    tools_context, skills_context, artifacts = assemble_tools(raw, paths, store)
     # TASK-34：撞顶自动续写（Y=llm.continuation.max_count，独立预算键，默认启用）
     cont_cfg = raw["llm"].get("continuation", {})
     continuation = ContinuationRunner.from_config(cont_cfg)
@@ -131,7 +138,8 @@ def _assemble_app(args, launch, store):
         skills=skills_context,
     )
     from core.harness.durable_session import install_recovery
-    install_recovery(tools_context, coordinator)
+    if not inspection:
+        install_recovery(tools_context, coordinator)
     return {
         "coordinator": coordinator, "renderer": renderer, "store": store, "writer": writer,
         "agent_def": agent_def, "primary": primary, "fallback": fallback,
@@ -217,19 +225,31 @@ async def _run_ui(app: dict, *, continue_session: bool) -> None:
     try:
         await _serve_ui(app, continue_session=continue_session)
     finally:
-        # 包含 UI 构造/欢迎输出失败路径；SQLite 连接关闭前等 writer commit。
-        service = getattr(app.get("tools"), "process_service", None)
-        if service is not None:
-            from core.tools.operation_runner import thread_call
-            await thread_call(service.close)
-        network = getattr(app.get("tools"), "network_service", None)
-        if network is not None:
-            from core.tools.operation_runner import thread_call
-            await thread_call(network.close)
+        await _close_services(app)
+
+
+async def _close_services(app):
+    from core.tools.operation_runner import thread_call
+    async with contextlib.AsyncExitStack() as services:
         if "writer" in app:
-            result = await app["writer"].close()
-            if result != "confirmed":
-                raise app["writer"].storage_error()
+            async def close_writer():
+                if await app["writer"].close() != "confirmed":
+                    raise app["writer"].storage_error()
+            services.push_async_callback(close_writer)
+        for key in ("network_service", "process_service"):
+            service = getattr(app.get("tools"), key, None)
+            if service is not None:
+                services.push_async_callback(thread_call, service.close)
+
+
+async def _run_inspection(app, prompt):
+    try:
+        return await one_shot.inspect_once(app, prompt)
+    finally:
+        try:
+            await app["tools"].operations.close()
+        finally:
+            await _close_services(app)
 
 
 async def _serve_ui(app: dict, *, continue_session: bool) -> None:
@@ -287,11 +307,34 @@ def main(argv: list[str] | None = None) -> int:
     enable_windows_vt()
     args = parse_args(argv)
     try:
+        if (args.exec_events or args.output_schema is not None) and args.exec_prompt is None:
+            raise ValueError("--exec-events 和 --output-schema 均需配合 --exec PROMPT 使用")
+        if args.exec_prompt is not None:
+            prompt = one_shot.prompt_from_args(args)
+            schema = one_shot.load_output_schema(args.output_schema) if args.output_schema is not None else None
+            if schema is not None:
+                prompt += ("\n\n完成必要的项目检查后，最终回答只输出一个满足以下 schema 的 JSON 值。\n"
+                           + json.dumps(schema, ensure_ascii=False, separators=(',', ':')))
+            app = build_app(args)
+            try:
+                try:
+                    receipt = asyncio.run(_run_inspection(app, prompt))
+                finally:
+                    app["store"].close()
+            except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+                receipt = one_shot.failed_receipt(app, exc)
+            except Exception as exc:
+                logging.getLogger(__name__).exception("单轮检查执行或收尾失败")
+                receipt = one_shot.failed_receipt(app, exc)
+            if schema is not None:
+                receipt = one_shot.validate_receipt_output(receipt, schema)
+            return app["renderer"].finish(receipt)
         if handle_maintenance(args):
             return 0
         if args.show_paths:
             launch = load_launch_config(args, BASE_DIR)
             print(format_result({**launch.paths.facts(), "db_path": str(launch.db_path),
+                                 "instruction_files": [str(p) for p in launch.paths.instruction_files()],
                                  "config_sources": launch.sources,
                                  "env_file": str(launch.env_file)}))
             return 0

@@ -74,12 +74,14 @@ class RunLifecycleMixin:
         self._writer.set_answer_message_id(run_id, f"{run_id}-assistant")
         task = self._store.task_link_run(self.session_id, run_id)
         request.task_id = task["task_id"] if task else None
+        dispatch_session = self.session_id   # 收尾竞态防护：/new・resume 与本 Run 收尾
+                                             # 交错时，_finish_run 只认派发时刻所属会话
         try:
             from core.harness.task_execution import run_with_task
             result = await run_with_task(self, request)
         finally:
             self._active = None
-        await self._finish_run(result)
+        await self._finish_run(result, dispatch_session)
 
     async def _emit_checked(self, event: RuntimeEvent) -> None:
         """事件单入口：迟到数据拦截（终态后该 Run 的事件不再展示/落库）。"""
@@ -98,11 +100,21 @@ class RunLifecycleMixin:
         else:
             await self._writer.append(event)
 
-    async def _finish_run(self, result: RunResult) -> None:
-        """durability 落定 → 终态/快照落库 → 暂停语义（取消不自动续跑）。"""
+    async def _finish_run(self, result: RunResult, session_id: str | None = None) -> None:
+        """durability 落定 → 终态/快照落库 → 暂停语义（取消不自动续跑）。
+
+        session_id = 派发时刻所属会话；与当前会话不一致（/new・resume 与本 Run 收尾
+        交错）时：run 级耐久落账照做，会话级状态（任务结算 / last_result / 暂停语义）
+        一律不得写进新会话（与 new_session / resume_session 同一条会话隔离不变量）。
+        """
         durability = await self._writer.flush()
         result.durability = durability
         result.last_durable_seq = self._writer.last_durable_seq(result.run_id)
+        if session_id is not None and session_id != self.session_id:
+            self._store.pending_state(result.run_id, "done")
+            if durability != "confirmed":
+                self._renderer.render_error(self._writer.storage_error())
+            return
         from core.harness.durable_session import checkpoint_finished
         checkpoint_finished(self, result)
         if durability != "confirmed":

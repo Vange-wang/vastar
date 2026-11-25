@@ -7,7 +7,38 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+
+def _run_bounded(fn, timeout, on_timeout):
+    """TASK-168：本文件是密封 Job 内独立 stdlib worker（document_adapter 只拷贝本文件），
+    不得 import core.*——墙钟兜底以最小形态内联（与 core/harness/deadline.py 同语义：
+    daemon worker＋超时遗弃不杀线程＋on_timeout 调用方线程 best-effort）。"""
+    import threading
+    done = threading.Event()
+    box = {}
+
+    def work():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=work, daemon=True).start()
+    if done.wait(timeout):
+        if "error" in box:
+            raise box["error"]
+        return False, box.get("value")
+    try:
+        on_timeout()
+    except Exception:
+        pass
+    return True, None
+
+
 TEXT_LIMIT = 1024 * 1024
+_READ_BOUND_S = 60   # TASK-168：pdftotext 读/wait 上界（超时 kill 并 EngineUnavailable）
+_WAIT_BOUND_S = 30
 NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -23,7 +54,8 @@ def failure(request, exc):
     result = {"status": "partial", "records": [], "uncovered": [reason], "more": False,
               "diagnostics": {"error_type": type(original).__name__, "raw_error": str(original),
                               "errno": getattr(original, "errno", None), "winerror": getattr(original, "winerror", None)},
-              "ocr": {"requested": request["ocr"], "status": "unavailable", "confidence": None,
+              "ocr": {"requested": request.get("ocr") if isinstance(request, dict) else None,
+                      "status": "unavailable", "confidence": None,
                       "unrecognized_regions": ["entire requested range; bounds unknown"]}}
     if unavailable:
         result["availability"] = {"status": "unavailable", "reason_code": "external_program_start_failed",
@@ -79,11 +111,17 @@ def pdf_window(path, request):
     except OSError as exc:
         raise EngineUnavailable() from exc
     with process:
-        data = process.stdout.read(TEXT_LIMIT + 1)
+        timed_out, data = _run_bounded(lambda: process.stdout.read(TEXT_LIMIT + 1),
+                                       _READ_BOUND_S, lambda: process.kill())  # TASK-168
+        if timed_out:
+            raise EngineUnavailable("pdftotext read timed out")
         clipped = len(data) > TEXT_LIMIT
         if clipped:
             process.kill()
-        code = process.wait()
+        timed_out, code = _run_bounded(process.wait, _WAIT_BOUND_S,
+                                       lambda: process.kill())  # TASK-168
+        if timed_out:
+            raise EngineUnavailable("pdftotext wait timed out")
     if code in (0xC0000135, 0xC0000142, 0xC000007B, 0xC0000139):
         raise EngineUnavailable(f"Windows loader failed: exit_code=0x{code:08X}")
     if code and not clipped:
@@ -150,7 +188,13 @@ def docx_window(path, request):
 
 
 def extract(request):
-    function = {"txt": text_window, "md": text_window, "pdf": pdf_window, "docx": docx_window}[request["kind"]]
+    # §三-8：缺 kind/未知 kind 不得在 try 外裸崩——worker 契约 = 永远输出 failure JSON 回执。
+    if not isinstance(request, dict):
+        return failure({}, ValueError(f"document request must be a JSON object, got {type(request).__name__}"))
+    function = {"txt": text_window, "md": text_window, "pdf": pdf_window,
+                "docx": docx_window}.get(request.get("kind"))
+    if function is None:
+        return failure(request, ValueError(f"unsupported document kind: {request.get('kind')!r}"))
     try:
         records, gaps, more = function(Path("source"), request)
         return {"status": "partial", "records": records, "uncovered": gaps, "more": more,
@@ -162,5 +206,10 @@ def extract(request):
 
 
 if __name__ == "__main__":
-    request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    # §三-8：最后一道边界——request.json 损坏/缺参数也输出 failure JSON，不裸退。
+    try:
+        request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(json.dumps(failure({}, exc), ensure_ascii=False))
+        raise SystemExit(0) from None
     print(json.dumps(extract(request), ensure_ascii=False))

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from pathlib import Path
 
@@ -167,8 +168,18 @@ class ToolExecutor:
     def _resolve_arg_paths(self, args: dict) -> tuple[Path, dict[str, Path]]:
         raw = args.get("path")
         base = self._ctx.cwd or self._ctx.project_root
+        if self._ctx.project_inspection:
+            from core.one_shot import readable
+            candidate = base / str(raw) if raw is not None else base
+            if (not readable(self._ctx.project_root, self._ctx.protected_paths, candidate)
+                    or any(args.get(key) is not None for key in _EXTRA_PATH_KEYS)):
+                raise permissions.PathRejected("单轮只读检查仅可读取执行根内普通项目文件")
+            # Use the checked lexical path and confirm its resolved target below.
+            raw = os.path.abspath(candidate)
         resolved = (permissions.resolve_read_path(base, str(raw))
                     if raw is not None else base)
+        if self._ctx.project_inspection and resolved != Path(raw):
+            raise permissions.PathRejected("单轮只读检查拒绝重定向路径")
         extra: dict[str, Path] = {}
         for key in _EXTRA_PATH_KEYS:
             if args.get(key) is not None:
@@ -179,6 +190,9 @@ class ToolExecutor:
     def _skip_filter(self, approved_path=None):
         """发现工具沿用读取权限：根内 .env 可见；根外须显式读取并经过 ASK。"""
         def _skip(p: Path) -> bool:
+            if self._ctx.project_inspection:
+                from core.one_shot import readable
+                return not readable(self._ctx.project_root, self._ctx.protected_paths, p)
             if ".git" in p.parts or ".venv" in p.parts or p.name in (".git", ".venv"):
                 return True
             if (p != approved_path and permissions.is_env_path(p) and
@@ -201,7 +215,8 @@ class ToolExecutor:
         return await run_sync(spec, args, resolved, self._ctx.project_root,
                               self._skip_filter(resolved), args_sum, resolved_extra,
                               audit_fields, control, data_dir=self._ctx.data_dir,
-                              artifacts=self._ctx.artifacts)
+                              artifacts=self._ctx.artifacts,
+                              inspection_paths=self._ctx.protected_paths if self._ctx.project_inspection else None)
 
 
 async def _ask_user(gate: AskGate | None, question: AskQuestion, *,

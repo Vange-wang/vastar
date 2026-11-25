@@ -37,11 +37,17 @@ def memory_context(coordinator):
         if not row['memory_read_enabled']:
             return []
         items = []
-        for item in json.loads(row['memory_snapshot_json']):
-            current = service.store.memory_item(item['scope'], item['key'])
-            if current is None or not policy.active(current, service.store._now()) or not policy.active(item, service.store._now()):
-                continue
+        snapshot = json.loads(row['memory_snapshot_json'] or '[]')
+        if not isinstance(snapshot, list):
+            snapshot = []   # 快照形状损坏：按无记忆装配（与 read_enabled=0 同口径），不裸崩
+        for item in snapshot:
             try:
+                # 旧格式/损坏快照条目缺键时 policy.active/item[...] 抛 KeyError——
+                # 跳过该条（与 verify_sources 失败同口径），不得让 memory_context 整体裸崩。
+                current = service.store.memory_item(item['scope'], item['key'])
+                if (current is None or not policy.active(current, service.store._now())
+                        or not policy.active(item, service.store._now())):
+                    continue
                 verify_sources(service, coordinator.session_id, item)
                 items.append(item)
             except (ValueError, TypeError, KeyError):

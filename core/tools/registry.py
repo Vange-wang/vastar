@@ -124,6 +124,7 @@ class ToolsContext:
     final_answer_policy: FinalAnswerPolicy = field(default_factory=FinalAnswerPolicy)
     task_budget_defaults: dict = field(default_factory=dict)  # A30 draft proposal, never automatic credit.
     rolling_tool_history: bool = False
+    project_inspection: bool = False
 
 
 class ToolRegistry:

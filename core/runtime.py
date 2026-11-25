@@ -50,7 +50,7 @@ from core.tools.registry import ToolsContext
 DEFAULT_RUN_TOTAL_S = 900.0   # A30：Run 级总超时缺省；provider timeouts 可覆盖。
 
 
-def _capability_note(enabled: list[str], permission_mode: str = "ask") -> str:
+def _capability_note(enabled: list[str], permission_mode: str = "ask", *, inspection=False) -> str:
     """提示与工具清单一致性（R21/R25，V1）：按启用清单与权限模式动态注入。
 
     开态不得声称"没有任何工具/只读"；写操作组已开（R25）：备份/可逆删除/硬拒清单
@@ -61,6 +61,9 @@ def _capability_note(enabled: list[str], permission_mode: str = "ask") -> str:
                 "不能操作数据库。用户询问需要工具的任务时，明确说明当前版本不具备"
                 "该能力，不要假装执行。")
     names = "、".join(enabled)
+    if inspection:
+        return (f"当前为一次性项目只读检查，可用工具：{names}。只检查执行根中的普通项目文件。"
+                "如目标需要写入、联网或运行命令，请说明需要用户在交互会话中继续。")
     head = (f"当前已启用工具：{names}。可读写文件与目录：覆盖/改写前自动备份、"
             "删除可逆恢复；凭据类、.git 内部、系统目录、config/logs/memory 始终拒绝。")
     if permission_mode == "auto":
@@ -174,7 +177,7 @@ class ReActRuntime:
         if self._tools is not None and not is_draft_request(request):
             # 工具清单（name/description/parameters）计入 token 预算（Spec §7）
             note = _capability_note(self._tools.registry.enabled,
-                                    self._tools.permission_mode)
+                                    self._tools.permission_mode, inspection=self._tools.project_inspection)
             if self._tools.registry.enabled:
                 schema_text = json.dumps(self._tools.registry.to_openai_tools(),
                                          ensure_ascii=False)

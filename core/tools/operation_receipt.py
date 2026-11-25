@@ -12,6 +12,10 @@ def _friendly_failure_reason(exc: BaseException, resolved: Path | None) -> str:
 
     用户可见文案不得出现裸 WinError/traceback；原始 errno/异常类由调用方进审计。
     """
+    if getattr(exc, 'origin', None) == 'tool_param':
+        # §三-9：ToolParamError 的文案即用户可见原文（工具契约），原样透出——
+        # 包成「工具实现异常（ToolParamError）」会把用户参数错误误分类为实现缺陷。
+        return str(exc)
     if isinstance(exc, PermissionError):
         return (f"无访问权限：{resolved or '目标路径'}"
                 "（该目录可能属于其他账户或受系统保护）")
@@ -58,14 +62,16 @@ def _contract_from_facts(facts: dict) -> dict:
 
 
 async def run_sync(spec, args, resolved, project_root, skip, args_sum,
-                   resolved_extra, audit_fields, control, *, data_dir=None, artifacts=None):
+                   resolved_extra, audit_fields, control, *, data_dir=None, artifacts=None,
+                   inspection_paths=None):
     from core.tools.operation_control import OperationCancelled
     from core.tools.operation_resources import file_facts
     from core.tools.operation_runner import thread_call
     control.checkpoint("prepare")
     from core.tools.isolated_read import run_isolated, supports
     if supports(spec):
-        outcome = await run_isolated(spec, args, resolved, project_root, args_sum, control)
+        outcome = await run_isolated(spec, args, resolved, project_root, args_sum, control,
+                                     inspection_paths=inspection_paths)
         if outcome.status == 'executed':
             return result_outcome(spec, outcome.result, args_sum, audit_fields, control, artifacts, resolved)
         return outcome

@@ -48,6 +48,7 @@ class ImpactReport:
     links: list[str] = field(default_factory=list)          # 已检出：链接/junction 后代
     sensitive: list[str] = field(default_factory=list)      # 已检出：命中硬拒/凭据黑名单的后代
     case_conflicts: list[str] = field(default_factory=list)  # 已检出：同目录大小写异写冲突
+    unverified: list[str] = field(default_factory=list)     # 未测：stat 失败项（红线 :10-12）
 
     def summary(self) -> str:
         parts = [f"{self.entries} 项 / {self.total_bytes} 字节"]
@@ -57,6 +58,9 @@ class ImpactReport:
             parts.append(f"含敏感路径 {len(self.sensitive)} 个")
         if self.case_conflicts:
             parts.append(f"含大小写异写冲突 {len(self.case_conflicts)} 处")
+        if self.unverified:
+            parts.append(f"未测 {len(self.unverified)} 项（stat 失败，字节口径不完整："
+                         f"{'; '.join(self.unverified[:3])}）")
         return "，".join(parts)
 
 
@@ -87,8 +91,10 @@ def scan_tree(root: Path, project_root: Path) -> ImpactReport:
             try:
                 if p.is_file():
                     report.total_bytes += p.stat().st_size
-            except OSError:
-                pass                          # 单项 stat 失败不静默：该项计入条数但字节缺失
+            except OSError as exc:
+                # §三-10：红线 :10-12「未覆盖的维度一律报未测」——stat 失败显式入
+                # 未测清单（字节口径不完整可观测），不得 except: pass 静默吞没。
+                report.unverified.append(f"{p} [{type(exc).__name__}]")
     return report
 
 

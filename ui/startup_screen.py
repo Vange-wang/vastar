@@ -12,7 +12,7 @@ from pathlib import Path
 
 _CACHE = Path(__file__).parent / "assets" / "startup" / "wallpaper.frames.zlib"
 _MAINTENANCE = {
-    "-h", "--help", "--show-paths", "--init-project", "--migrate-from",
+    "-h", "--help", "--show-paths", "--exec", "--exec-events", "--init-project", "--migrate-from",
     "--apply-migration", "--migrate-storage", "--apply-storage-migration",
 }
 _active = None

@@ -12,7 +12,7 @@ from core.tools.process_output import ProcessOutput
 from core.tools.report_transport import output_for
 from memory.repositories.tasks import encode
 
-
+_BOUNDED_WAIT_S = 30  # TASK-168：terminate/close 的 wait/join 上界（楔死 watch 线程只遗弃不等）
 class ProcessService:
     def __init__(self, sandbox, ledger, artifacts):
         self.sandbox, self.ledger, self.artifacts = sandbox, ledger, artifacts
@@ -49,7 +49,15 @@ class ProcessService:
             if self.closed or sum(not e["done"].is_set() for e in self.entries.values()) >= 4:
                 raise RuntimeError("process service closed or active job limit reached")
             if operation_id:
-                replay = self.ledger.replay(operation_id, digest, run_id)
+                try:
+                    replay = self.ledger.replay(operation_id, digest, run_id)
+                except ValueError:
+                    if spec.name != 'analyze_spreadsheet' or payload is None:
+                        raise
+                    from core.tools.sheet_service import replay_after_worker_update
+                    replay = replay_after_worker_update(self.ledger, operation_id, run_id, args, payload)
+                    if replay is None:
+                        raise
                 if replay:
                     return replay
             if self.sandbox._active or self.sandbox._unresolved:
@@ -97,7 +105,7 @@ class ProcessService:
             for old_id, old in list(self.entries.items()):
                 if len(self.entries) > 32 and old["done"].is_set():
                     del self.entries[old_id]
-            entry["thread"] = threading.Thread(target=watch, args=(self, entry), daemon=False)
+            entry["thread"] = threading.Thread(target=watch, args=(self, entry), daemon=True)
             result = self.outcome(entry, "start_process")
             entry["thread"].start()
             return result
@@ -179,7 +187,11 @@ class ProcessService:
                 if not entry["done"].is_set():
                     verify(entry)
                     entry["stop_reason"] = reason
-            entry["done"].wait()
+            from core.harness.deadline import run_bounded_sync
+            run_bounded_sync(entry["done"].wait, _BOUNDED_WAIT_S, label="process-terminate",
+                             on_timeout=lambda: entry["info"].update(
+                                 operation_state="unknown",
+                                 recovery="terminate 等待 30s 超时；watch 线程已遗弃（TASK-168）"))
         return self.read(job_id, owner=owner, started_at=started_at, max_bytes=1)
 
     def assert_can_rollback(self):
@@ -198,5 +210,6 @@ class ProcessService:
             entries = list(self.entries.values())
             for entry in entries:
                 entry["cancel"].set()
+        from core.harness.deadline import run_bounded_sync
         for entry in entries:
-            entry["thread"].join()
+            run_bounded_sync(entry["thread"].join, _BOUNDED_WAIT_S, label="process-close-join")  # TASK-168：join 加界

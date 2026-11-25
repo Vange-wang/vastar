@@ -7,19 +7,23 @@ from contextlib import closing
 from pathlib import Path
 
 from core.path_context import PathContextError, read_json, require_database, write_new_json
-from memory.migrations.validation import inspect_database
+from memory.migrations.validation import inspect_connection
 
 
-def check_database(path):
+def check_database(path, *, opening_store=False):
     require_database(path)
-    try:
-        inspect_database(path)
-    except ValueError as exc:
-        raise PathContextError(str(exc)) from exc
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
-        version = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
-        if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-            raise PathContextError(f"数据库完整性检查失败：{path}")
+        if opening_store:
+            # Store performs chain and integrity checks under ownership before WAL.
+            # Preserve the path-layer table checks without scanning either table.
+            db.execute("SELECT 1 FROM sessions LIMIT 0")
+            db.execute("SELECT 1 FROM messages LIMIT 0")
+            return
+        db.execute("BEGIN")
+        try:
+            version = inspect_connection(db)
+        except ValueError as exc:
+            raise PathContextError(str(exc)) from exc
         return {"schema_version": version,
                 "sessions": db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
                 "messages": db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]}
@@ -61,12 +65,21 @@ def migration_preview(source_app, project, data):
     config = read_json(source_app / "config/settings.json")
     if config.get("schema_version", 1) != 1:
         raise PathContextError("一次性导入仅接受 schema 1 安装目录")
-    source = (source_app / config["memory"]["path"]).resolve()
+    memory = config.get("memory")
+    if not isinstance(memory, dict) or not memory.get("path"):
+        raise PathContextError("源配置缺 memory.path；拒绝继续（请检查 config/settings.json）")
+    source = (source_app / memory["path"]).resolve()
     facts = check_database(source)
     _validate_destination(project, data)
+    runtime = config.get("runtime")
+    if not isinstance(runtime, dict):
+        raise PathContextError("源配置缺 runtime 节；拒绝继续（请检查 config/settings.json）")
+    prompt = config.get("prompt")
+    if not isinstance(prompt, dict):
+        raise PathContextError("源配置缺 prompt 节；拒绝继续（请检查 config/settings.json）")
     resources = [source_app / "memory/_backups", source_app / "memory/_trash",
-                 source_app / config["runtime"].get("log_dir", "logs"),
-                 source_app / config["prompt"].get("snapshot_dir", "prompts/snapshots")]
+                 source_app / runtime.get("log_dir", "logs"),
+                 source_app / prompt.get("snapshot_dir", "prompts/snapshots")]
     asset_roots = [source_app / config.get(section, {}).get("dir", default)
                    for section, default in (("prompt", "prompts"), ("skills", "skills"))]
     for resource in [*resources, *asset_roots]:
@@ -114,6 +127,9 @@ def _migrate_config(source_app, project, data):
             _copy_resource(source, data / "resources" / section)
             raw.setdefault(section, {})["dir"] = f"@data/resources/{section}"
     raw["schema_version"] = 2
+    for section in ("memory", "runtime"):
+        if not isinstance(raw.get(section), dict):
+            raise PathContextError(f"源配置缺 {section} 节；拒绝继续（请检查 config/settings.json）")
     raw["memory"]["path"] = "memory/history.db"
     raw["runtime"]["log_dir"] = "logs"
     # 不复制密钥；用户配置目录 .env 或显式 paths.env_file 由操作者选取。

@@ -80,9 +80,10 @@ def _select(root, parts, skip, notes, directories_only):
 def _matches(root, pattern, skip, notes):
     parsed = Path(pattern)
     if parsed.drive or parsed.root:
-        raise NotImplementedError('Non-relative patterns are unsupported')
+        # 用户参数错误（§三-9）：不得抛 NotImplementedError 被执行层误报「工具实现异常」。
+        raise ToolParamError(f'模式必须是相对路径（收到 {pattern!r}；不支持盘符/绝对路径）')
     if any('**' in part and part != '**' for part in parsed.parts):
-        raise ValueError("Invalid pattern: '**' can only be an entire path component")
+        raise ToolParamError(f"模式非法：'**' 只能是独立路径分量（收到 {pattern!r}，如 **/*.py）")
     directories_only = pattern.endswith(('/', os.sep))
     seen = set()
     for directory in _descendants(root, skip, notes):

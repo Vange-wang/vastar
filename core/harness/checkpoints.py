@@ -5,6 +5,7 @@ import re
 import uuid
 from dataclasses import asdict
 
+from core.harness.watermark_blocks import watermark_blocks
 from memory.repositories.tasks import encode
 
 
@@ -12,11 +13,40 @@ def digest(value):
     return hashlib.sha256(encode(value).encode()).hexdigest()
 
 
+_PAGE_SIZE = 5000  # KM-27：分页流式哈希的页大小（页间让出 GIL/锁，内存以页为界）
+
+
 def watermark(store, limit=None):
-    clause = " WHERE rowid<=?" if limit is not None else ""
-    rows = store._conn.execute("SELECT rowid,event_id,payload FROM events" + clause + " ORDER BY rowid",
-                               (limit,) if limit is not None else ()).fetchall()
-    return {"rowid": rows[-1][0] if rows else 0, "count": len(rows), "hash": digest([list(r) for r in rows])}
+    """与整体 fetchall+json.dumps+sha256 逐字节一致的分页流式实现（KM-27）。"""
+    hasher = hashlib.sha256()
+    hasher.update(b"[")
+    count, last, started = 0, 0, False
+    while True:
+        conds, params = [], []
+        if started:
+            conds.append("rowid>?")
+            params.append(last)
+        if limit is not None:
+            conds.append("rowid<=?")
+            params.append(limit)
+        sql = "SELECT rowid,event_id,payload FROM events"
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        with store._lock:
+            page = store._conn.execute(sql + " ORDER BY rowid LIMIT ?", (*params, _PAGE_SIZE)).fetchall()
+        if not page:
+            break
+        for row in page:
+            if started:
+                hasher.update(b", ")
+            hasher.update(json.dumps([row[0], row[1], row[2]], ensure_ascii=False).encode())
+            started = True
+        count += len(page)
+        last = page[-1][0]
+        if len(page) < _PAGE_SIZE:
+            break
+    hasher.update(b"]")
+    return {"rowid": last if count else 0, "count": count, "hash": hasher.hexdigest()}
 
 
 def artifact_references(artifacts, value):
@@ -57,7 +87,7 @@ class CheckpointService:
             body = {"validation_records": validations,
                     "operation_versions": {r["operation_id"]: digest(json.loads(r["facts"])) for r in operations},
                     "task_id": task_id, "step_id": step_id, "plan_revision": task["current_plan_revision"],
-                    "task_revision": task["revision"], "task": task, "event_watermark": watermark(store),
+                    "task_revision": task["revision"], "task": task, "event_watermark": watermark_blocks(store),   # TASK-174：blocks:v1 增量水位（旧检查点 prefix:v1 不变）
                     "context_ref": asdict(meta), "memory_revision": store._conn.execute(
                         "SELECT COALESCE(MAX(revision),0) FROM memory_revisions").fetchone()[0],
                     "pending_operations": [r["operation_id"] for r in operations if r["state"] in

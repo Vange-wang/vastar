@@ -2,9 +2,8 @@
 import hashlib
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
-from core.tools.document_adapter import DocumentPayload
+from core.tools.document_adapter import stage_python_runtime
 from core.tools.permissions import check_credential_path, is_env_path
 
 OMIT = {'.venv', 'node_modules', '__pycache__', '.pytest_cache', 'logs'}
@@ -99,10 +98,8 @@ class CodePayload:
         from core.skills.code_change_paths import attach
 
         self.verify_unchanged()
-        source = self.root / next(iter(self.hashes))
-        proxy = SimpleNamespace(path=source, before=self.hashes[source.relative_to(self.root).as_posix()],
-                                kind='txt', manifest=self.manifest)
-        DocumentPayload.stage(proxy, profile)
+        stage_python_runtime(profile.work)
+        profile.memory_bytes = self.manifest['limits']['memory_bytes']
         repo = profile.work / 'repo'
         repo.mkdir()
         for rel in self.hashes:
@@ -129,6 +126,9 @@ def copy_git(payload, dest):
     count = 0
     for name in ('HEAD', 'index', 'objects', 'refs', 'packed-refs'):
         src = (payload.own if name in {'HEAD', 'index'} else payload.common) / name
+        if name in {'objects', 'refs'}:
+            require(src.is_dir() and regular(src), 'code_git_metadata_directory_invalid')
+            (dest / name).mkdir()
         if not src.exists():
             continue
         for path in ([src] if src.is_file() else src.rglob('*')):

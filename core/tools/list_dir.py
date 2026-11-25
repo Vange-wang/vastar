@@ -42,6 +42,7 @@ def run(args: dict, *, resolved_path: Path, resolved_extra=None,
 
     lines: list[str] = []
     skipped = 0
+    protected = 0
     truncated = False
     stack: deque[tuple[Path, int]] = deque([(resolved_path, 1)])
     while stack:
@@ -60,6 +61,9 @@ def run(args: dict, *, resolved_path: Path, resolved_extra=None,
             if entry.name in SKIP_DIRS:
                 skipped += 1
                 continue
+            if skip and skip(entry):
+                protected += 1
+                continue
             if len(lines) >= limit:
                 truncated = True
                 break
@@ -75,6 +79,8 @@ def run(args: dict, *, resolved_path: Path, resolved_extra=None,
     out = "\n".join(lines) if lines else "（空目录）"
     if skipped:
         out += f"\n（跳过 .git/.venv 条目 {skipped} 个）"
+    if protected:
+        out += f"\n（跳过受保护条目 {protected} 个）"
     if truncated:
         out += f"\n（已达 limit={limit}，其余条目未列出）"
     return out

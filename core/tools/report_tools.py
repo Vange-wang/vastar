@@ -6,11 +6,17 @@ from core.tools.report_service import ReportService
 
 def install_report_tools(context):
     context.report_service = ReportService(context)
+    column = {'type': 'object', 'properties': {'field': {'type': 'string'}, 'label': {'type': 'string'}},
+              'required': ['field', 'label'], 'additionalProperties': False}
+    table = {'type': 'object', 'description': '原始 JSON 对象数组的表格投影。按原顺序保留所选字段。',
+             'properties': {'title': {'type': 'string'}, 'columns': {'type': 'array', 'items': column,
+                                                                     'minItems': 1, 'maxItems': 5}},
+             'required': ['title', 'columns'], 'additionalProperties': False}
     for name in ("report_capabilities", "generate_report"):
         generation = name == "generate_report"
         context.registry.register(ToolSpec(name,
             "S03 只读来源生成受管报告；必须逐次批准离线隔离执行；不覆盖原件，真人版式待用户。",
-            {"type": "object", "properties": {"path": {"type": "string"}} if generation else {},
+            {"type": "object", "properties": {"path": {"type": "string"}, 'table': table} if generation else {},
              "required": ["path"] if generation else [], "additionalProperties": False},
             "B", lambda **_: "special handler required", effect="read", resource_scope="file", retryable=False))
 

@@ -19,38 +19,47 @@ def xml(archive, name):
     return ET.fromstring(raw)
 
 
-def bounded(rows):
-    if len(rows) > MAX_ROWS or sum(len(r["cells"]) for r in rows) > MAX_CELLS:
+def check_budget(row_count, width, total_cells):
+    if row_count > MAX_ROWS or total_cells > MAX_CELLS:
         raise ValueError("表格超过行数/单元格内存预算；原始副本保留")
-    if any(len(r["cells"]) > MAX_COLS for r in rows):
-        raise ValueError("表格超过 64 列")
-    return rows
+    if width > MAX_COLS:
+        raise ValueError("表格超过 64 列预算")
 
 
 def read_csv(path):
     csv.field_size_limit(4096)
     rows = []
+    total_cells = 0
     with open(path, encoding="utf-8-sig", newline="") as stream:
         for index, values in enumerate(csv.reader(stream), 1):
+            total_cells += len(values)
+            check_budget(index, len(values), total_cells)
             rows.append({"source_row": index, "cells": [cell(v) for v in values]})
-            if index > MAX_ROWS or sum(len(r["cells"]) for r in rows[-1:]) > MAX_COLS:
-                raise ValueError("CSV 行/列预算超限")
-    return [{"name": "CSV", "visibility": "visible", "rows": bounded(rows)}], []
+    return [{"name": "CSV", "visibility": "visible", "rows": rows}], []
 
 
 def xlsx_rows(archive, target, strings, date_styles):
     rows, seen = [], set()
+    total_cells, previous_row = 0, 0
     root = xml(archive, target)
     for row in root.findall("s:sheetData/s:row", NS):
-        row_id = int(row.get("r", len(rows) + 1))
+        declared = row.get("r")
+        if declared is None:
+            first = row.find("s:c", NS)
+            first_ref = re.fullmatch(r"[A-Z]+([1-9]\d*)", first.get("r", "")) if first is not None else None
+            declared = first_ref[1] if first_ref else previous_row + 1
+        row_id = int(declared)
         if row_id in seen or row_id <= 0:
             raise ValueError("行坐标无效或重复")
         seen.add(row_id)
+        previous_row = row_id
         values = {}
         for item in row.findall("s:c", NS):
             match = re.fullmatch(r"([A-Z]+)([1-9]\d*)", item.get("r", ""))
             if match is None:
                 raise ValueError("缺少单元格坐标")
+            if int(match[2]) != row_id:
+                raise ValueError("单元格行号与所在行不一致")
             col = 0
             for ch in match[1]:
                 col = col * 26 + ord(ch) - 64
@@ -74,9 +83,11 @@ def xlsx_rows(archive, target, strings, date_styles):
                     tag = "formatted_value"
                 value = cell(raw, tag, style=item.get("s", "0"))
             values[col] = value
-        cells = [values.get(c, cell("")) for c in range(1, max(values, default=0) + 1)]
-        rows.append({"source_row": int(row.get("r", len(rows) + 1)), "cells": cells})
-        bounded(rows)
+        width = max(values, default=0)
+        total_cells += width
+        check_budget(len(rows) + 1, width, total_cells)
+        cells = [values[c] if c in values else cell("") for c in range(1, width + 1)]
+        rows.append({"source_row": row_id, "cells": cells})
     return rows
 
 

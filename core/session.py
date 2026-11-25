@@ -150,6 +150,17 @@ class SessionCoordinator(SessionResumeMixin, RunLifecycleMixin, ModelSwitchMixin
         # 暂停时仅放行 interrupt 输入（取消收尾后自动执行的那条）
         return not self._pending[0].interrupt
 
+    async def run_once(self, text: str) -> RunResult:
+        """Dispatch exactly one input on a fresh, dedicated coordinator."""
+        self.ensure_session()
+        if self.has_active_or_pending() or self.last_result is not None:
+            raise ValueError("单轮运行需要独立的新会话")
+        await self.submit(text)
+        await self._dispatch(self._pending.popleft())
+        if self.last_result is None:
+            raise RuntimeError("单轮运行结束时缺少终态")
+        return self.last_result
+
     def stop(self) -> None:
         self._stopped = True
         if self._active is not None:
@@ -251,6 +262,15 @@ class SessionCoordinator(SessionResumeMixin, RunLifecycleMixin, ModelSwitchMixin
         self.session_id = f"sess-{uuid.uuid4().hex}"
         self._pending.clear()
         self.paused = False
+        # 会话隔离（与 resume_session 同一不变量：按会话的状态不得跨 /new 泄漏）：
+        # last_result / _last_user_input 不清 → /retry 把旧会话输入重发进新会话、
+        # /continue 以旧会话 Run 为前缀续写；_cancel_pending 不清 → 新会话首个 Run
+        # 被旧会话的 Ctrl+C 预设取消；_seq 从 1 重排（新会话消息序号独立）。
+        self.last_result = None
+        self._last_user_input = None
+        self._pause_after_interrupt = False
+        self._cancel_pending = False
+        self._seq = itertools.count(1)
         self._runtime.rotate_ask_session(self.session_id)   # B08：旧会话临时授权就此失效
         self.ensure_session()
         return self.session_id

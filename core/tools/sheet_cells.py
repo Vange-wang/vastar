@@ -1,6 +1,6 @@
 """Worker-only literal classification; never evaluate spreadsheet expressions."""
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
 MONEY = re.compile(r"(?P<currency>[$¥￥€£]|USD|CNY|EUR|GBP)?\s*(?P<n>[+-]?[\d,]+(?:\.\d+)?)\s*(?P<scale>千|万|亿)?\Z")
@@ -9,7 +9,10 @@ MONEY = re.compile(r"(?P<currency>[$¥￥€£]|USD|CNY|EUR|GBP)?\s*(?P<n>[+-]?[
 def number(raw):
     if not NUMBER.fullmatch(raw) or len(raw) > 80:
         return None
-    value = Decimal(raw)
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return None
     return value if value.is_finite() and abs(value.adjusted()) <= 50 and len(value.as_tuple().digits) <= 30 else None
 
 

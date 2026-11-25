@@ -48,6 +48,7 @@ async def deliver_partial(s, reason):
     s.result.partial = True
     reason_label = {'run_total_timeout': 'Run 总时长超限', 'output_limit': '达到单次输出上限',
                     'stream_closed_without_finish': '流结束但缺少完成信号',
+                    'incomplete_tool_batch': '模型工具请求未完整结束',
                     'cancelled_by_user': '用户取消', 'input_budget_exceeded': '输入预算不足'}.get(reason, reason)
     s.result.terminal_note = f'未完成：本轮因 {reason_label} 停止，完整回答及尚未核实部分未完成；以上仅为已产出内容。'
     if body.strip():

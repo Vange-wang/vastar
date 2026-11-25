@@ -22,6 +22,12 @@ DRAFT_INSTRUCTION = (
     '"goal"：字符串，任务目标；\n'
     '"acceptance"：非空对象，键 a1/a2…，值为确定性验收对象，不能是描述字符串；'
     '文件成果使用 {"kind":"file_hash","path":"绝对输出路径","sha256":"预期内容SHA256"}；'
+    '报告或表格使用 {"kind":"deliverable","tool":"generate_report","source_path":"原始输入绝对路径",'
+    '"files":["pdf","docx"]}。表格工具为 analyze_spreadsheet，files 可含 analysis.json、grouped-1.json。'
+    '报告选列可用 fields 按顺序列出字段。表格可验收 cleaned.xlsx，group_by 可约定 key_column、value_column（从1开始）。'
+    '已知输入 SHA256 时可用 source_sha256 代替 source_path，无须预测生成文件的路径和哈希。'
+    '编码任务可用 {"kind":"code_check","workspace":"Git 项目绝对路径","scope":["源文件相对路径"],'
+    '"command":"批准的离线 pwsh 验证命令"}；'
     '命令使用 {"kind":"command","argv":["程序","参数"],"exit_code":0,"stdout_sha256":"预期输出SHA256"}。'
     '不能猜造路径、内容或哈希；缺关键参数时只输出 {"clarification":"请补充哪些信息"}，不生成计划。\n'
     '"constraints"：数组（可为空）；\n'
@@ -100,7 +106,7 @@ def task_summary(task: dict) -> str:
         lines.append(f"  {s['step_id']} [{s['status']}] {s['goal']}")
     remaining = ", ".join(task["remaining_work"]) or "无"
     lines.append(f"剩余工作：{remaining} · 细节 /task status")
-    lines.append("下一步：/task step <Step ID> 选步骤 → 输入执行要求 → /task deliver 验收交付。")
+    lines.append("用 /task run 执行已确认的下一步，或 /task step <Step ID> 选步骤并输入要求。结束后 /task deliver 验收交付。")
     return "\n".join(lines)
 
 

@@ -12,18 +12,18 @@ def completion_results(validator, task, step, results):
     if not all(r["passed"] for r in results.values()) or any(s["status"] != "COMPLETED" for s in others):
         return checked
     for previous in others:
-        recorded = _recorded_results(validator.store, task["task_id"], previous)
+        recorded = recorded_results(validator.store, task["task_id"], previous)
         checked[previous["step_id"]] = {}
         for key in previous["acceptance_ids"]:
             old = recorded.get(key)
-            result = (validator.check(task["acceptance"][key], old.get("evidence", {}))
+            result = (validator.check_step_result(task, previous, task["acceptance"][key], old.get("evidence", {}))
                       if isinstance(old, dict) and old.get("passed") is True else
                       {"passed": False, "reason": "已完成步骤缺少可信验收记录；需要重新验收", "evidence": {}})
             checked[previous["step_id"]][key] = result
     return checked
 
 
-def _recorded_results(store, task_id, step):
+def recorded_results(store, task_id, step):
     for ref in reversed(step["evidence_refs"]):
         if not isinstance(ref, str) or not ref.startswith("validation-"):
             continue

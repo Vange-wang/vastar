@@ -1,7 +1,7 @@
 """Accepted task, policy-governed procedure and independent process evidence."""
 import copy
 
-from core.harness.task_completion import _recorded_results
+from core.harness.task_completion import recorded_results
 from core.harness.validators import Validator
 from core.skills.release_package import digest, require
 
@@ -14,7 +14,7 @@ def accepted(service, task_id):
     covered = set()
     for step in task['steps']:
         require(step['status'] == 'COMPLETED', 'source_step_incomplete')
-        recorded = _recorded_results(service.store, task_id, step)
+        recorded = recorded_results(service.store, task_id, step)
         for key in step['acceptance_ids']:
             result = recorded.get(key, {})
             require(result.get('passed') is True and validator.check(task['acceptance'][key], result.get('evidence', {}))['passed'],

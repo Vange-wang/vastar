@@ -83,14 +83,16 @@ class ReadWorkers:
             self.discard(process)
 
 
-async def run_isolated(spec, args, resolved, project_root, args_sum, control):
+async def run_isolated(spec, args, resolved, project_root, args_sum, control, *, inspection_paths=None):
     control.checkpoint('read_spawn')
     control.started = True
     control.on_started()
     pool = control.read_workers
     process = await pool.acquire()
-    payload = json.dumps({'tool': spec.name, 'args': args, 'path': str(resolved),
-                          'root': str(project_root)}, ensure_ascii=False).encode('utf-8')
+    request = {'tool': spec.name, 'args': args, 'path': str(resolved), 'root': str(project_root)}
+    if inspection_paths is not None:
+        request['inspection_paths'] = [str(p) for p in inspection_paths]
+    payload = json.dumps(request, ensure_ascii=False).encode('utf-8')
     control.facts['read_worker_pid'] = process.pid
     exchange = asyncio.create_task(asyncio.to_thread(pool.exchange, process, payload))
     cancelled = asyncio.create_task(control.async_cancel.wait())

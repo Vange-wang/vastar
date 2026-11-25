@@ -102,14 +102,16 @@ def continue_precheck(store, session_id) -> str | None:
         required_pending = store._conn.execute(
             "SELECT COUNT(*) FROM task_questions WHERE task_id=? AND state='pending'"
             " AND required=1 AND expires_at>?", (task["task_id"], time.time())).fetchone()[0]
-        unsettled = store._conn.execute(
-            "SELECT 1 FROM tool_operations WHERE task_id=?"
-            " AND state IN ('prepared','executing','unknown')", (task["task_id"],)).fetchone()
     if row and row["recovery_error"]:
         return f"任务需先核实恢复（{row['recovery_error']}）；/task resume 恢复后再续写"
     if required_pending and not step["independent"]:
         return "有必答问题未回答；/task answer 回答后再续写"
-    if unsettled:
+    from core.skills.code_change_delivery import unaccounted_operations
+    try:
+        pending = unaccounted_operations(store, task)
+    except (KeyError, TypeError, ValueError) as exc:
+        return f"已验收的操作记录需核实（{exc}）；请先 /task resume"
+    if pending:
         return "有未落定动作；先 /task reconcile <Operation ID> 核实"
     if row and row["active_run"]:
         return "存在未结算的 Run 预算，必须核实；/task reconcile 或 /task resume"

@@ -13,8 +13,8 @@ LIMITS = {'input_bytes': 8 * 1024 * 1024, 'output_bytes': 16 * 1024 * 1024,
 
 
 def options(args):
-    if set(args) - {'path', 'header', 'rules', 'units'} or not isinstance(args.get('path'), str):
-        raise ValueError('需要 path；仅支持 header/rules/units')
+    if set(args) - {'path', 'header', 'rules', 'units', 'group_by'} or not isinstance(args.get('path'), str):
+        raise ValueError('需要 path；可指定 header/rules/units/group_by')
     header, rules, units = args.get('header', True), args.get('rules', []), args.get('units', {})
     if type(header) is not bool or not isinstance(rules, list) or len(rules) > 16 or not isinstance(units, dict):
         raise ValueError('无效分析选项')
@@ -38,7 +38,14 @@ def options(args):
             raise ValueError('日期格式与时区必须显式（unknown/UTC）')
     if len(json.dumps(args)) > 16384:
         raise ValueError('选项过大')
-    return {'header': header, 'rules': rules, 'units': units}
+    result = {'header': header, 'rules': rules, 'units': units}
+    if 'group_by' in args:
+        group = args['group_by']
+        if (not isinstance(group, dict) or set(group) != {'key_column', 'value_column'}
+                or any(type(col) is not int or not 1 <= col <= 64 for col in group.values())):
+            raise ValueError('group_by 需要 1..64 的 key_column（分组列）与 value_column（数值列）')
+        result['group_by'] = dict(group)
+    return result
 
 
 class SheetPayload:

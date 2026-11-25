@@ -33,6 +33,19 @@ def validate_schema_contract(schema):
         validate_schema_contract(schema["items"])
 
 
+def _json_equal(value, expected):
+    """JSON numbers compare numerically, including inside compound enum values."""
+    if type(value) in (int, float) and type(expected) in (int, float):
+        return value == expected
+    if type(value) is not type(expected):
+        return False
+    if isinstance(value, dict):
+        return value.keys() == expected.keys() and all(_json_equal(v, expected[k]) for k, v in value.items())
+    if isinstance(value, list):
+        return len(value) == len(expected) and all(_json_equal(a, b) for a, b in zip(value, expected, strict=True))
+    return value == expected
+
+
 def _check_value(value, schema):
     types = {"object": dict, "array": list, "string": str, "integer": int, "boolean": bool,
              "number": (int, float), "null": type(None)}
@@ -41,7 +54,7 @@ def _check_value(value, schema):
         return False
     if kind in {"integer", "number"} and isinstance(value, bool):
         return False
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(_json_equal(value, member) for member in schema["enum"]):
         return False
     if kind == "object":
         props = schema.get("properties", {})
@@ -67,6 +80,34 @@ class Validator:
         if scope != meta["scope"] or ref.rsplit("#", 1)[-1] != meta["hash"][:12]:
             raise ValueError("产物作用域不符")
         return payload
+
+    def check_step_result(self, task, step, criterion, evidence):
+        if not isinstance(criterion, dict) or criterion.get('kind') not in {'deliverable', 'code_check'}:
+            return self.check(criterion, evidence)
+        try:
+            if not isinstance(evidence, dict) or not isinstance(evidence.get('operation_id'), str):
+                raise ValueError('验收须引用任务操作编号')
+            op = self.store.operation_get(evidence['operation_id'])
+            latest = self.store._conn.execute(
+                'SELECT run_id,terminal_state FROM runs WHERE task_id=? AND step_id=? ORDER BY rowid DESC LIMIT 1',
+                (task['task_id'], step['step_id'])).fetchone()
+            if not op or not latest or latest['terminal_state'] not in {'COMPLETED', 'INTERRUPTED'}:
+                raise ValueError('缺少本步骤已结束的运行')
+            if criterion['kind'] == 'code_check':
+                from core.skills.code_change_delivery import verify_code_check
+                proof = verify_code_check(self.store, self.artifacts, criterion, evidence,
+                                          task_id=task['task_id'], step_id=step['step_id'], run_id=latest['run_id'])
+                return {'passed': True, 'kind': criterion['kind'], 'outputs': proof['outputs'],
+                        'evidence': proof['evidence'], 'accounted_operation_ids': proof['accounted_operation_ids'],
+                        'run_id': latest['run_id']}
+            else:
+                from core.harness.office_delivery import office_outputs
+                if (op['task_id'], op['step_id'], op['run_id']) != (task['task_id'], step['step_id'], latest['run_id']):
+                    raise ValueError('办公成果不属于本任务步骤的当前运行')
+                outputs = office_outputs(self.artifacts, criterion, op)
+            return {'passed': True, 'kind': criterion['kind'], 'outputs': outputs, 'evidence': evidence}
+        except (ValueError, KeyError, TypeError, OSError, ArtifactError) as exc:
+            return {'passed': False, 'reason': str(exc), 'evidence': evidence}
 
     def check(self, criterion, evidence):
         try:
@@ -123,6 +164,6 @@ class Validator:
         keys = step["acceptance_ids"]
         if not keys:
             raise ValueError("步骤没有用户明确关联的验收项；needs_input")
-        results = {k: self.check(task["acceptance"][k], evidence.get(k, {})) for k in keys}
+        results = {k: self.check_step_result(task, step, task["acceptance"][k], evidence.get(k, {})) for k in keys}
         checked = completion_results(self, task, step, results)
         return commit_validation(self.store, task, step, checked, reviewer, waiting)

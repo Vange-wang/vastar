@@ -11,7 +11,11 @@ def install_sheet_tools(context):
         context.registry.register(ToolSpec(name,
             '冻结表格副本，逐次批准离线隔离分析；显式清洗、独立复算、公式不执行，产物分页核查。',
             {'type': 'object', 'properties': {'path': {'type': 'string'}, 'header': {'type': 'boolean'},
-                'rules': {'type': 'array', 'items': {'type': 'object'}}, 'units': {'type': 'object'}} if analyzing else {},
+                'rules': {'type': 'array', 'items': {'type': 'object'}}, 'units': {'type': 'object'},
+                'group_by': {'type': 'object', 'description': '可选：按一个字段分组，逐组汇总另一个数值列（列号从1开始）',
+                    'properties': {key: {'type': 'integer', 'minimum': 1, 'maximum': 64}
+                                   for key in ('key_column', 'value_column')},
+                    'required': ['key_column', 'value_column'], 'additionalProperties': False}} if analyzing else {},
              'required': ['path'] if analyzing else [], 'additionalProperties': False},
             'B', lambda **_: 'special handler required', effect='read', resource_scope='file', retryable=False))
 

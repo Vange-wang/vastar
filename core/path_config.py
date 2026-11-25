@@ -78,7 +78,7 @@ def _layers(args, app, project):
     return raw, sources
 
 
-def _legacy(args, app):
+def _legacy(args, app, *, opening_store):
     config = _absolute(getattr(args, "config", None) or
                        os.environ.get("VASTAR_CONFIG") or "config/settings.json", app)
     raw = read_json(config)
@@ -88,20 +88,20 @@ def _legacy(args, app):
     if getattr(args, "continue_session", False):
         require_database(db)
     if db.exists():
-        check_database(db)
+        check_database(db, opening_store=opening_store)
     paths = PathContext(app, db.parent, "legacy", app, app)
     return LaunchConfig(raw, paths, config, [str(config)], db,
                         _absolute(raw["runtime"].get("log_dir", "logs"), app), app / ".env")
 
 
-def load_launch_config(args, app_dir):
+def load_launch_config(args, app_dir, *, opening_store=False):
     app, invocation = Path(app_dir).resolve(), Path.cwd().resolve()
     project_arg = getattr(args, "project", None)
     project = _absolute(project_arg, invocation) if project_arg else discover_project(invocation)
     if project is None:
         if any(getattr(args, key, None) for key in ("data_dir", "cwd", "workspace")):
             raise PathContextError("--data-dir/--cwd/--workspace 需要 --project 或已初始化项目")
-        return _legacy(args, app)
+        return _legacy(args, app, opening_store=opening_store)
     identity = read_identity(project)
     raw, sources = _layers(args, app, project)
     data = _absolute(getattr(args, "data_dir", None) or
@@ -129,8 +129,16 @@ def load_launch_config(args, app_dir):
     if not db.is_relative_to(data) or not log.is_relative_to(data):
         raise PathContextError("schema 2 的数据库与日志必须位于 data_dir 内")
     require_database(db)
-    check_database(db)
-    env = Path(raw.get("paths", {}).get("env_file", user_config_dir() / ".env"))
+    check_database(db, opening_store=opening_store)
+    env_value = raw.get("paths", {}).get("env_file")
+    if env_value and str(env_value).startswith("@data/"):
+        # §三-12：@data/ 前缀此前永不解析、静默失效（字面相对路径指不存在的文件）；
+        # 与 prompt/skills 的 dir 同口径解析并守越界。
+        env = _absolute(str(env_value)[6:], data)
+        if not env.is_relative_to(data):
+            raise PathContextError("@data 资源路径越界")
+    else:
+        env = Path(env_value) if env_value else Path(user_config_dir() / ".env")
     raw["resolved_paths"] = paths.facts()
     raw["config_sources"] = sources
     return LaunchConfig(raw, paths, Path(sources[-1]), sources, db, log, env)

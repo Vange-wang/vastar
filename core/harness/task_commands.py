@@ -17,9 +17,9 @@ from core.harness.validators import Validator
 HELP = ("/task new <自然语言目标> 模型起草计划草案；/task ok [--json] 确认草案并落库；"
         "/task drop 放弃草案；/task accept [--json] <JSON: goal,acceptance,constraints,budget,steps>"
         "（budget 须含 \"max_calls\": 正整数；默认人话摘要，--json 输出明细）；/task status；"
-        "/task attach <Task ID>；/task step <Step ID>；/task resume；/task budget [single|worker]；"
+        "/task attach <Task ID>；/task step <Step ID>；/task run [Step ID] 执行已确认步骤；/task resume；/task budget [single|worker]；"
         "/task reconcile <Operation ID>；/task validate <JSON: step_id,evidence>；/task deliver [验收键到operation_id的JSON] 本轮验收交付；"
-        "/task answer <JSON: question_id,answer>；/task cancel-question <ID>；/task tools enable。"
+        "/task outputs 复查已验收文件；/task answer <JSON: question_id,answer>；/task cancel-question <ID>；/task tools enable。"
         "明确的自然语言操作目标也可起草；/task ok 前不执行工具。"
         "accept/new+ok/attach 显式关联任务；step 选定后普通输入执行；旧会话不自动变成任务。")
 
@@ -37,7 +37,7 @@ async def task_command(coord, arg):
     if not hasattr(coord, "task_service"):
         raise ValueError("任务服务未装配")
     cmd, _, tail = arg.partition(" ")
-    if cmd in {"new", "ok"}:
+    if cmd in {"new", "ok", "run"}:
         from core.llm.pricing import require_task_model
         require_task_model(coord)
     service, session = coord.task_service, coord.session_id
@@ -61,6 +61,9 @@ async def task_command(coord, arg):
     if cmd == "deliver":
         from core.harness.task_delivery import deliver_task
         return deliver_task(coord, tail)
+    if cmd == "outputs":
+        from core.harness.task_delivery import task_outputs
+        return task_outputs(coord)
     if cmd == "attach":
         coord.ensure_session()
         return service.attach(session, tail.strip())
@@ -75,6 +78,8 @@ async def task_command(coord, arg):
                 "budget": TaskRuntime(service).snapshot(task["task_id"])}
     if cmd == "step":
         return checkpoint_command(coord, service.select_step(session, tail.strip()))
+    if cmd == "run":
+        return await run_accepted_step(coord, task, tail.strip())
     if cmd == "validate":
         result = Validator(service.store, coord.task_tools_context.artifacts).validate_step(service, session, **json.loads(tail))
         return checkpoint_command(coord, result)
@@ -103,6 +108,32 @@ async def task_command(coord, arg):
         _source(coord, arg)
         return "已按当前用户命令启用三项任务工具；权限 ASK 和文件工具开关不变。"
     raise ValueError(HELP)
+
+
+async def run_accepted_step(coord, task, requested):
+    """Queue a previously accepted step; leave any in-flight or attempted step to recovery."""
+    if coord.has_active_or_pending():
+        raise ValueError('已有输入正在执行或排队，请等待当前回执')
+    steps = task['steps']
+    done = {s['step_id'] for s in steps if s['status'] == 'COMPLETED'}
+    active = next((s for s in steps if s['status'] in {'RUNNING', 'VERIFYING'}), None)
+    if active and requested and requested != active['step_id']:
+        raise ValueError('当前步骤尚待验收，请先核对 /task status')
+    chosen = active or next((s for s in steps if (not requested or s['step_id'] == requested)
+                             and s['status'] == 'READY' and done.issuperset(s['depends_on'])), None)
+    if not chosen:
+        raise ValueError('没有符合依赖条件的待执行步骤')
+    sid = chosen['step_id']
+    attempted = coord.task_service.store._conn.execute(
+        'SELECT 1 FROM runs WHERE task_id=? AND step_id=? LIMIT 1', (task['task_id'], sid)).fetchone()
+    if attempted:
+        raise ValueError('当前步骤已有运行记录，请先 /task deliver 验收或 /task resume 核对恢复')
+    selected = checkpoint_command(coord, coord.task_service.select_step(coord.session_id, sid))
+    if selected.get('checkpoint_status'):
+        return selected
+    receipt = await coord.submit('执行已确认的任务步骤 ' + sid + '：' + chosen['goal']
+                                 + '\n遵守已确认的约束及工具审批，按原验收条件交付。')
+    return {'step_id': sid, 'input_id': receipt.input_id, 'state': receipt.state}
 
 
 def checkpoint_command(coord, result):

@@ -1,5 +1,6 @@
 """持久操作账本：先确认意图，后执行；未知结果禁止自动重投。"""
 import hashlib
+from contextlib import nullcontext
 from dataclasses import asdict
 
 from core.harness.reconcile import reconcile_facts
@@ -108,7 +109,7 @@ class OperationLedger:
                                      fault=self.fault)
         self.fault("after_receipt")
 
-    def reconcile(self, operation_id):
+    def reconcile(self, operation_id, *, write_guard=nullcontext):
         self.store._owner.assert_held()
         operation = self.store.operation_get(operation_id)
         if operation is None:
@@ -122,5 +123,6 @@ class OperationLedger:
         if operation["state"] != "committed":
             if state == 'committed' and 'observed' in result['evidence']:
                 operation['facts']['after'] = result['evidence']['observed']
-            self.store.operation_finish(operation_id, state, receipt, operation["facts"], reconciliation=result)
+            with write_guard():
+                self.store.operation_finish(operation_id, state, receipt, operation["facts"], reconciliation=result)
         return result

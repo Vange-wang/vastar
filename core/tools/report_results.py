@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from core.tools.report_source import reader_safe
+from core.tools.safety import atomic_write_text
 
 
 def validate(result, source):
@@ -69,10 +70,14 @@ def validate(result, source):
 def publish(artifacts, payload, result):
     files = validate(result, payload.source)
     hashes = payload.verify_unchanged()
+    deliverables = {}
     # Files stay in an owned UUID directory, never in a user-selected destination.
     for name, data in files.items():
         filename = "report." + name if name in {"pdf", "docx"} else name
-        (payload.staging / filename).write_bytes(data)
+        path = payload.staging / filename
+        path.write_bytes(data)
+        if name in {"pdf", "docx"}:
+            deliverables[name] = str(path.absolute())
     meta = []
     try:
         for name, data in files.items():
@@ -82,10 +87,12 @@ def publish(artifacts, payload, result):
         for item in meta:
             artifacts.delete(item.artifact_id, item.version)
         raise
-    (payload.staging / "STATUS.txt").write_text("机器检查通过；真人版式待 Vange\n", encoding="utf-8")
     proof = {"structure": result["structure"], "visual": result["visual"], "versions": payload.versions,
              "hashes": hashes, "artifacts": {name: item.uri for name, item in zip(files, meta, strict=True)}}
-    (payload.staging / "evidence.json").write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(payload.staging / "evidence.json", json.dumps(proof, ensure_ascii=False, indent=2))
+    atomic_write_text(payload.staging / "STATUS.txt", "机器检查通过；真人版式待 Vange\n")
     return {"status": "machine_verified", "human_layout": "pending Vange", "directory": str(payload.staging),
+            "deliverables": {name: {"path": path, "artifact_ref": proof["artifacts"][name]}
+                             for name, path in deliverables.items()},
             "files": list(files), "artifact_refs": proof["artifacts"], "hashes": hashes,
             "versions": payload.versions, "note": "可打开及机器检查已完成；不代表真人版式合格。"}

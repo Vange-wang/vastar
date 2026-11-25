@@ -127,7 +127,8 @@ def _post_plan_guard(spec, all_targets, resolved, plan, project_root, args_sum, 
     if plan.recursive:
         scan = impact_scan.scan_tree(resolved, project_root)
         impact = {"entries": scan.entries, "links": scan.links,
-                  "sensitive": scan.sensitive, "case_conflicts": scan.case_conflicts}
+                  "sensitive": scan.sensitive, "case_conflicts": scan.case_conflicts,
+                  "unverified": scan.unverified}   # §三-10：未测维度进审计（红线口径）
     return None, toctou_fp, impact
 
 

@@ -5,15 +5,36 @@ import subprocess
 from pathlib import Path
 
 
-def git(root, *args):
+def git(root, *args, missing_status=None, reject_stderr=False):
     env = {**os.environ, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': 'NUL',
            'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0'}
     result = subprocess.run([str(Path(__file__).parent / 'git/git.exe'), '-c', 'safe.directory=*',
         '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=NUL', *args],
         cwd=root / 'repo', env=env, capture_output=True, timeout=30)
-    if result.returncode:
+    if result.returncode == missing_status:
+        return None
+    if result.returncode or (reject_stderr and result.stderr):
         raise RuntimeError('git_probe_failed:' + str(result.returncode) + ':' + result.stderr.decode('utf-8', errors='replace')[:2000])
     return result.stdout.decode('utf-8', errors='strict')
+
+
+def revision(root):
+    head = git(root, 'rev-parse', '--verify', '--quiet', 'HEAD', missing_status=1)
+    if head is not None:
+        sha = head.strip()
+        git(root, 'cat-file', '-e', sha + '^{commit}')
+        return {'base_revision': sha}
+    branch = git(root, 'symbolic-ref', '--no-recurse', 'HEAD').strip()
+    if not branch.startswith('refs/heads/'):
+        raise RuntimeError('unborn_head_must_name_a_local_branch')
+    git(root, 'check-ref-format', branch)
+    # --exists distinguishes missing (2) from unreadable or corrupt (1).
+    if git(root, 'show-ref', '--exists', branch, missing_status=2) is not None:
+        raise RuntimeError('unresolved_existing_head_ref')
+    # Git may skip a malformed ref with a warning and a successful exit status.
+    if git(root, 'for-each-ref', '--count=1', '--format=%(refname)', reject_stderr=True).strip():
+        raise RuntimeError('unborn_head_in_nonempty_ref_database')
+    return {'base_revision': None, 'unborn_ref': branch}
 
 
 def inspect_git(root, request):
@@ -29,10 +50,15 @@ def inspect_git(root, request):
             'check-ignore', '--no-index', '--', omitted], cwd=root / 'repo', capture_output=True)
         if check.returncode:
             raise RuntimeError('unignored_omission_unsupported')
-    head = git(root, 'rev-parse', '--verify', 'HEAD').strip()
+    identity = revision(root)
     status = git(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching')
-    diff = git(root, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--')
-    return {'base_revision': head, 'dirty_raw': status, 'diff': diff}
+    diff_args = ('diff', '--no-ext-diff', '--no-textconv')
+    if identity['base_revision'] is None:
+        # With no commit, the index is compared to the empty tree, then to the worktree.
+        diff = git(root, *diff_args, '--cached', '--') + git(root, *diff_args, '--')
+    else:
+        diff = git(root, *diff_args, 'HEAD', '--')
+    return {**identity, 'dirty_raw': status, 'diff': diff}
 
 
 def main():

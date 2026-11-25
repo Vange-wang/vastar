@@ -4,7 +4,7 @@ from memory.migrations.facts import migrate_facts
 from memory.migrations.forgetting import migrate_forgetting
 from memory.migrations.history import migrate_history
 from memory.migrations.operations import migrate_operations
-from memory.migrations.schema import ARTIFACTS_DDL, SCHEMA_VERSION
+from memory.migrations.schema import ARTIFACTS_DDL, EVENT_WM_BLOCKS_DDL, SCHEMA_VERSION
 from memory.migrations.shared import migrate_shared
 from memory.migrations.task_validation import migrate_task_validation
 from memory.migrations.tasks import migrate_tasks
@@ -45,6 +45,9 @@ def upgrade_one(db, version):
         return
     if version == 10:
         migrate_shared(db)
+        return
+    if version == 11:
+        db.execute(EVENT_WM_BLOCKS_DDL)   # TASK-174：blocks:v1 派生水位块表
         return
     raise ValueError(f"缺少 schema {version} → {version + 1} 的迁移步骤")
 

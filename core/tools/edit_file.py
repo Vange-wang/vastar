@@ -7,6 +7,8 @@ old 必须唯一命中：0 处 / 多处（未显式 replace_all）都在计划�
 from __future__ import annotations
 
 import hashlib
+import re
+from bisect import bisect_left
 from pathlib import Path
 
 from core.tools import safety
@@ -16,7 +18,8 @@ from core.tools.registry import OpPlan, ToolParamError, ToolSpec
 NAME = "edit_file"
 
 DESCRIPTION = ("按「原文本 → 新文本」精确替换编辑文件：old 必须唯一命中（0 处或多处"
-               "都拒绝，多处可显式 replace_all=true 全部替换）。编辑前自动备份、原子写入。"
+               "都拒绝，多处可显式 replace_all=true 全部替换）。也可传 edits 数组一次修改多处，"
+               "每项 old 在同一原文件中必须唯一且不重叠。编辑前自动备份、原子写入。"
                "成功结果已包含路径/字节/是否覆盖/备份位置/校验值；无需再调用只读工具复核。")
 PARAMETERS = {
     "type": "object",
@@ -24,10 +27,15 @@ PARAMETERS = {
         "path": {"type": "string", "description": "目标文件路径（相对项目根或绝对路径）"},
         "old": {"type": "string", "description": "待替换的原文（必须精确唯一命中）"},
         "new": {"type": "string", "description": "替换后的文本"},
+        "edits": {"type": "array", "minItems": 1, "maxItems": 128,
+                  "description": "多个精确替换，共享原文并一次写入。单独使用，不与 old/new/replace_all 混用。",
+                  "items": {"type": "object", "properties": {"old": {"type": "string", "minLength": 1},
+                                                            "new": {"type": "string"}},
+                            "required": ["old", "new"], "additionalProperties": False}},
         "replace_all": {"type": "boolean",
                         "description": "old 命中多处时显式放开为全部替换（默认 false）"},
     },
-    "required": ["path", "old", "new"],
+    "required": ["path"],
 }
 
 
@@ -41,9 +49,10 @@ def _require_args(args: dict) -> tuple[str, str]:
     return old, new
 
 
-def _read_text(resolved_path: Path) -> str:
+def _read_text(resolved_path: Path, *, keep_newlines: bool) -> str:
     try:
-        return resolved_path.read_text(encoding="utf-8")
+        with resolved_path.open(encoding="utf-8", newline="" if keep_newlines else None) as source:
+            return source.read()
     except UnicodeDecodeError as exc:
         raise ToolParamError(f"非 UTF-8 文本（{exc}）——edit_file 仅支持文本，显式拒绝") from exc
 
@@ -60,14 +69,59 @@ def _count_hits(text: str, old: str, replace_all: bool) -> int:
     return count if replace_all else 1
 
 
-def plan(args: dict, *, resolved_path: Path, resolved_extra=None) -> OpPlan:
-    old, new = _require_args(args)
+def _batch_edit(text: str, edits: list) -> str:
+    if not isinstance(edits, list) or not 1 <= len(edits) <= 128:
+        raise ToolParamError("edits 必须包含 1 至 128 项替换")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    # A CRLF occupies two characters in the source and one in the matching text.
+    crlf = [match.start() - index for index, match in enumerate(re.finditer("\r\n", text))]
+    default_eol = re.search(r"\r\n|\r|\n", text)
+    spans = []
+    for index, edit in enumerate(edits, 1):
+        if not isinstance(edit, dict) or set(edit) != {"old", "new"}:
+            raise ToolParamError(f"edits 第 {index} 项必须包含 old 和 new")
+        old, new = _require_args(edit)
+        needle = old.replace("\r\n", "\n").replace("\r", "\n")
+        start = normalized.find(needle)
+        if start < 0:
+            raise ToolParamError(f"edits 第 {index} 项 old 在原文中未命中（0 处）")
+        if normalized.find(needle, start + 1) >= 0:
+            raise ToolParamError(f"edits 第 {index} 项 old 在原文中命中多处，需要唯一命中")
+        end = start + len(needle)
+        start += bisect_left(crlf, start)
+        end += bisect_left(crlf, end)
+        eol = re.search(r"\r\n|\r|\n", text[start:end]) or default_eol
+        replacement = new.replace("\r\n", "\n").replace("\r", "\n")
+        spans.append((start, end, replacement.replace("\n", eol.group()) if eol else new))
+    pieces, cursor = [], 0
+    for start, end, replacement in sorted(spans):
+        if start < cursor:
+            raise ToolParamError("edits 各项在原文中的范围重叠，已拒绝编辑")
+        pieces.extend((text[cursor:start], replacement))
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
+def _prepare(args: dict, resolved_path: Path) -> tuple[str, str, int]:
+    batch = "edits" in args
+    if batch and {"old", "new", "replace_all"}.intersection(args):
+        raise ToolParamError("edits 不能与顶层 old/new/replace_all 混用")
+    if not batch:
+        old, new = _require_args(args)
     if not resolved_path.exists():
         raise ToolParamError(f"文件不存在：{resolved_path}")
-    text = _read_text(resolved_path)
-    replaced = _count_hits(text, old, bool(args.get("replace_all", False)))
-    new_text = text.replace(old, new) if args.get("replace_all", False) else \
-        text.replace(old, new, 1)
+    text = _read_text(resolved_path, keep_newlines=batch)
+    if batch:
+        new_text = _batch_edit(text, args["edits"])
+        return text, new_text, len(args["edits"])
+    replace_all = bool(args.get("replace_all", False))
+    count = _count_hits(text, old, replace_all)
+    return text, text.replace(old, new, -1 if replace_all else 1), count
+
+
+def plan(args: dict, *, resolved_path: Path, resolved_extra=None) -> OpPlan:
+    text, new_text, replaced = _prepare(args, resolved_path)
     size = max(len(text.encode("utf-8")), len(new_text.encode("utf-8")))
     return OpPlan(action="edit", targets=[resolved_path],
                   detail=f"替换 {replaced} 处（文件 {size} 字节）",
@@ -79,16 +133,9 @@ def run(args: dict, *, resolved_path: Path, resolved_extra=None,
         project_root=None, skip=None, op_context=None) -> str:
     control = from_context(op_context)
     control.checkpoint("prepare")
-    old, new = _require_args(args)
-    if not resolved_path.exists():
-        raise ToolParamError(f"文件不存在：{resolved_path}")
-    text = _read_text(resolved_path)
-    replace_all = bool(args.get("replace_all", False))
-    replaced = _count_hits(text, old, replace_all)
-    written = safety.atomic_write_text(
-        resolved_path, text.replace(old, new, -1 if replace_all else 1), control=control)
+    _, expected_text, replaced = _prepare(args, resolved_path)
+    written = safety.atomic_write_text(resolved_path, expected_text, control=control)
     # B10：写后回读校验（预期 hash = 替换后全文 sha256；实际 hash = 落盘回读 sha256）
-    expected_text = text.replace(old, new, -1 if replace_all else 1)
     expected = hashlib.sha256(expected_text.encode("utf-8")).hexdigest()
     actual = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
     before = (control.facts.get("before") or {}).get(str(resolved_path), {})

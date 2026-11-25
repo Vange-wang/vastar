@@ -6,13 +6,18 @@ from core.harness.checkpoints import CheckpointService
 from core.harness.recovery import RecoveryCoordinator
 
 
-def install_recovery(context, coordinator):
+def install_recovery(context, coordinator, *, verify="background"):
     store = context.task_service.store
     coordinator.task_service = context.task_service
     coordinator.task_tools_context = context
     coordinator.checkpoints = CheckpointService(store, context.artifacts)
     coordinator.recovery = RecoveryCoordinator(store, context.artifacts)
-    coordinator.recovery.recover_all()  # Store 已先持 owner，模型上下文尚未构建。
+    # KM-27：启动不做全量 recover_all（大库 6–10 分钟）；崩溃清扫纯 SQL，检查点核验转后台线程。
+    coordinator.recovery.swept = coordinator.recovery.sweep_interrupted()
+    if verify == "background":
+        coordinator.recovery.verify_all_background()
+    elif verify != "off":
+        raise ValueError(f"未知 verify 模式：{verify!r}")
     from core.memory_tools import install_memory
     install_memory(context, coordinator)
 

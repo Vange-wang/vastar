@@ -1,6 +1,9 @@
 """S06 serial scope, delegated edits and bounded approved ProcessService validation."""
 import asyncio
 import contextvars
+import difflib
+import hashlib
+import io
 import json
 import threading
 from pathlib import Path
@@ -48,6 +51,7 @@ async def execute(context, args, session, run, cancel, emitter):
             key = str(Path(args['definition']['workspace']).resolve())
         else:
             row = state.load(context, session, args['change_id'])
+            require(row['run_id'] == run, 'code_scope_run_mismatch')
             key = row['facts']['definition']['workspace']
         with LOCK:
             require(key not in BUSY, 'code_serial_busy')
@@ -62,7 +66,7 @@ async def execute(context, args, session, run, cancel, emitter):
                 result = await verify(context, row, args, session, run, cancel, emitter)
             else:
                 require(args['action'] == 'report', 'code_action_invalid')
-                result = report(context, row)
+                result = report(context, row, run)
         text = encode(result)
         if len(text.encode()) > 48000:
             artifact = context.artifacts.put(text.encode(), source_ref='code-change-output')
@@ -77,11 +81,22 @@ async def execute(context, args, session, run, cancel, emitter):
                 BUSY.discard(key)
 
 
+class CommandNotIssued(ValueError):
+    """A known pre-launch refusal; no job or child process exists."""
+
+    def __init__(self, reason, approval_source=None):
+        super().__init__(reason)
+        self.approval_source = approval_source
+
+
 async def launch(context, payload, session, run, cancel, emitter, oid):
     from core.tools.process_tools import start_approved
-    require(context.registry.is_enabled('start_process'), 'code_process_disabled')
+    if not context.registry.is_enabled('start_process'):
+        raise CommandNotIssued('code_process_disabled')
     result = await start_approved(context, context.registry.get('start_process'), {'script': payload.script},
         context.task_service.current(session)['task_id'], session, run, oid, SkillCancel(context, cancel), emitter, payload=payload)
+    if result.status == 'rejected' and result.origin == 'ask_gate':
+        raise CommandNotIssued('code_command_not_approved', result.audit.get('approval_source'))
     require(result.status == 'executed', 'code_process_not_started')
     return json.loads(result.result)
 
@@ -111,10 +126,10 @@ async def lock_scope(context, args, session, run, cancel, emitter):
     job = await launch(context, payload, session, run, cancel, emitter, None)
     entry = context.process_service.lookup(job['job_id'], job['owner'], job['started_at'])
     await asyncio.to_thread(entry['done'].wait)
-    info, text, output = state.output(context, job, job['owner'])
+    info, stdout, output = state.output(context, job, job['owner'])
     require(state.passed(info), 'code_baseline_probe_failed')
     payload.verify_unchanged()
-    baseline = state.probe(text)
+    baseline = state.probe(stdout)
     dirty = dirty_names(baseline['dirty_raw'])
     require(not any(p.casefold() == d.casefold().rstrip('/') or (d.endswith('/') and p.casefold().startswith(d.casefold()))
                     for p in scope for d in dirty), 'code_target_has_user_changes')
@@ -127,7 +142,7 @@ async def lock_scope(context, args, session, run, cancel, emitter):
                     revision=payload.revision, originals=originals, git_config=payload.git_config_hashes)
     definition = {**definition, 'workspace': str(payload.root)}
     row = state.save(context, session, args['change_id'], definition, baseline, payload.hashes, run)
-    return {'locked': True, 'base_revision': baseline['base_revision'], 'dirty': sorted(dirty), 'scope': scope,
+    return {'locked': True, **state.revision_identity(baseline), 'dirty': sorted(dirty), 'scope': scope,
             'acceptance': definition['acceptance'], 'operation_id': row['operation_id'], 'workspace': str(payload.root)}
 
 
@@ -162,14 +177,16 @@ def unchanged(row):
 
 def refresh(context, row):
     for attempt in row['facts']['attempts']:
+        if 'not_started' in attempt and 'job' not in attempt:
+            continue
         require('job' in attempt, 'code_incomplete_attempt_requires_review')
         if 'info' in attempt:
             continue
-        info, text, output = state.output(context, attempt['job'], attempt['job']['owner'])
+        info, stdout, output = state.output(context, attempt['job'], attempt['job']['owner'])
         attempt.update(info=info, output=output)
-        if text:
+        if stdout:
             try:
-                attempt['probe'] = state.probe(text)
+                attempt['probe'] = state.probe(stdout)
             except (ValueError, IndexError):
                 attempt['probe_error'] = True
     state.persist(context, row)
@@ -245,17 +262,23 @@ async def verify(context, row, args, session, run, cancel, emitter):
     index, facts = args['check'], row['facts']
     require(type(index) is int and 0 <= index < len(facts['definition']['checks']), 'code_check_invalid')
     require(len(facts['attempts']) < 12, 'code_retry_limit')
-    baseline = {k: facts['baseline'][k] for k in ('base_revision', 'dirty_raw', 'diff')}
+    baseline = state.baseline_probe(facts['baseline'])
     payload = CodePayload(facts['definition']['workspace'], facts['definition']['checks'][index]['command'], baseline)
     attempt = {'check': index, 'hashes': hashes, 'phase': 'baseline' if hashes == facts['hashes'] else 'candidate'}
     facts['attempts'].append(attempt)
     state.persist(context, row)
-    attempt['job'] = await launch(context, payload, session, run, cancel, emitter, row['operation_id'] + ':' + str(len(facts['attempts'])))
+    try:
+        attempt['job'] = await launch(context, payload, session, run, cancel, emitter,
+                                      row['operation_id'] + ':' + str(len(facts['attempts'])))
+    except CommandNotIssued as exc:
+        attempt['not_started'] = {'reason': str(exc), 'approval_source': exc.approval_source}
+        state.persist(context, row)
+        raise
     state.persist(context, row)
     return {'job': attempt['job'], 'completed': False, 'next': 'report after process completion; no automatic retry'}
 
 
-def report(context, row):
+def report(context, row, run=None):
     refresh(context, row)
     current = unchanged(row)
     facts, results = row['facts'], []
@@ -263,33 +286,64 @@ def report(context, row):
         attempts = [a for a in facts['attempts'] if a['check'] == index]
         latest = next((a for a in reversed(attempts) if a['hashes'] == current and 'info' in a), None)
         baseline = next((a['info'] for a in reversed(attempts) if a['phase'] == 'baseline' and 'info' in a), None)
-        valid = latest and latest.get('probe', {}).get('base_revision') == facts['baseline']['base_revision']
+        valid = latest and latest.get('probe') == state.baseline_probe(facts['baseline'])
         classification = state.classify(latest['info'], baseline) if valid else 'unverified'
         if latest and latest.get('probe_error') and latest['info'].get('exit_code') == 125:
             classification = 'environment_or_probe_failure'
         results.append({**check, 'classification': classification,
                         'process': latest['info'] if latest else None, 'output': latest['output'] if latest else None})
+        if attempts and 'not_started' in attempts[-1] and attempts[-1]['hashes'] == current:
+            results[-1]['last_not_started'] = attempts[-1]['not_started']
     verified = all(r['classification'] == 'passed' for r in results)
-    diffs = scope_diff(context, row)
-    artifact = context.artifacts.put(encode({'baseline': facts['baseline'], 'results': results, 'diffs': diffs}).encode(),
-                                     source_ref=row['operation_id'] + ':review')
+    changes, diffs = scope_diff(context, facts, current)
+    review = {'schema': 'vastar.code-review.v1', 'scope_operation_id': row['operation_id'],
+              'task_id': row['task_id'], 'step_id': row['step_id'], 'run_id': run or row['run_id'],
+              'workspace': facts['definition']['workspace'], 'scope': facts['definition']['scope'],
+              'baseline': facts['baseline'], 'results': results, 'file_changes': changes, 'diffs': diffs}
+    evidence = state.save_review(context, row, review)
     return {'state': 'ready_for_review' if verified else 'incomplete', 'completed': False, 'verified': verified,
-            'checks': results, 'scope': facts['definition']['scope'], 'base_revision': facts['baseline']['base_revision'],
-            'dirty_preserved': facts['baseline']['dirty'], 'evidence': artifact.uri,
-            'commit_paths': facts['definition']['scope'], 'limitations': 'No automatic commit/worktree removal; readonly offline snapshot; manual diff review required'}
+            'checks': results, 'scope': facts['definition']['scope'], **state.revision_identity(facts['baseline']),
+            'dirty_preserved': facts['baseline']['dirty'], 'evidence': evidence,
+            'scope_operation_id': row['operation_id'], 'file_changes': changes, 'commit_paths': list(changes),
+            'limitations': 'No automatic commit/worktree removal; readonly offline snapshot; manual diff review required'}
 
 
-def scope_diff(context, row):
-    import difflib
-    facts, result = row['facts'], {}
+def scope_diff(context, facts, current):
+    changes, diffs = {}, {}
     for rel in facts['definition']['scope']:
+        old_hash, new_hash = facts['hashes'].get(rel), current.get(rel)
+        if old_hash == new_hash:
+            diffs[rel] = ''
+            continue
         ref = facts['baseline']['originals'].get(rel)
+        require((ref is not None) == (old_hash is not None), 'code_baseline_original_missing')
         before = context.artifacts.get(*ref)[1] if ref else b''
         path = Path(facts['definition']['workspace']) / rel
-        after = path.read_bytes() if path.exists() else b''
-        result[rel] = ''.join(difflib.unified_diff(before.decode('utf-8', errors='replace').splitlines(True),
-            after.decode('utf-8', errors='replace').splitlines(True), fromfile='before/' + rel, tofile='after/' + rel))
-    return result
+        require(path.exists() == (new_hash is not None), 'code_concurrent_target_change')
+        after = path.read_bytes() if new_hash is not None else b''
+        require(old_hash is None or hashlib.sha256(before).hexdigest() == old_hash, 'code_baseline_original_changed')
+        require(new_hash is None or hashlib.sha256(after).hexdigest() == new_hash, 'code_concurrent_target_change')
+        status = 'added' if old_hash is None else 'deleted' if new_hash is None else 'modified'
+        kind, diffs[rel] = _review_diff(rel, status, before, after)
+        changes[rel] = {'status': status, 'before_sha256': old_hash, 'after_sha256': new_hash, 'diff_kind': kind}
+    return changes, diffs
+
+
+def _review_diff(rel, status, before, after):
+    """The hashes always describe exact bytes; only bounded UTF-8 text gets a line diff."""
+    if len(before) + len(after) > 512 * 1024 or before.count(b'\n') + after.count(b'\n') > 8000:
+        return 'size_limit', '文件大小或行数超过文本差异上限。请查看修改前后的 SHA-256。'
+    if b'\0' in before or b'\0' in after:
+        return 'binary', '文件包含二进制数据。请查看修改前后的 SHA-256。'
+    try:
+        old_lines, new_lines = (io.StringIO(data.decode('utf-8'), newline='\n').readlines() for data in (before, after))
+    except UnicodeDecodeError:
+        return 'non_utf8', '文件含无法按 UTF-8 解码的字节。请查看修改前后的 SHA-256。'
+    patch = difflib.unified_diff(old_lines, new_lines,
+                                 fromfile='/dev/null' if status == 'added' else 'before/' + rel,
+                                 tofile='/dev/null' if status == 'deleted' else 'after/' + rel)
+    return 'text', ''.join(line if line.endswith('\n') else line + '\n\\ No newline at end of file\n'
+                           for line in patch)
 
 
 class SkillCancel:

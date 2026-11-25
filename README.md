@@ -6,6 +6,8 @@ Vastar 是本地优先的个人 Agent，可在终端中检索项目资料、操�
 
 ## 从安装包安装（Windows x64）
 
+新版导出快照使用 `.gitattributes` 保留文件原始字节，可用默认 Git 换行配置克隆后按该版本的 `manifest.json` 校验。
+
 解压发布包，在解压目录打开 **PowerShell 7（pwsh）或更高版本**。下面的命令先让你输入新的安装目录，再安装核心运行时。选择解压目录以外的空路径。
 
 ~~~powershell
@@ -101,14 +103,29 @@ Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.FullName -n
 }
 ~~~
 
-如旧配置含可选组件的绝对路径，请在新版重新安装相应组件并更新路径。任一步失败，请保持两份安装停机，从保留的旧快照向**另一空目录**重试。下列命令启动新版：在终端输入 `/sessions`，确认原会话可见。正常使用后退出、重启，再确认升级后新增的会话仍可读。
+**3. 检查并执行数据库 schema 迁移（跨版本必检）。** 旧库 schema 低于新版要求时，首次启动会明确提示需要显式迁移并拒绝启动（不静默升级）。在新版根目录先跑只读预览（不改变任何数据）：
+
+~~~powershell
+Set-Location -LiteralPath $new
+.\runtime\python\python.exe -X utf8 -B main.py --migrate-storage "memory\history.db"
+~~~
+
+预览列出源版本、目标版本与待执行步（如 `[[11, 12]]`）；若无待执行步说明库已当前，可直接进入下一步启动。确认后执行迁移（自动先备份再原子切换）：
+
+~~~powershell
+.\runtime\python\python.exe -X utf8 -B main.py --migrate-storage "memory\history.db" --apply-storage-migration
+~~~
+
+执行前自动备份到 `memory\history.db.migrations\<id>\backup.db`，迁移日志 `memory\history.db.migration.json` 请保留备查。中断后重入同一命令会先自动核账恢复，不重复执行。回退数据的口径：停止实例后离线恢复该备份——回退代码不等于回退数据，勿用旧库覆盖已迁移的新库。本步骤验收基线：源库 schema 11 → 目标 schema 12，2026-11-22 于 866MB 生产库独立副本实测通过（预览只读 / 备份 / 启动 / 回退全链路）；目标提交以发布包 `manifest.json` 记录的来源提交为准。早期公开版 `v2026-11-19` 的升级验收维持既有记录，不在本次变更范围。
+
+**4. 启动新版并核对。** 如旧配置含可选组件的绝对路径，请在新版重新安装相应组件并更新路径。任一步失败，请保持两份安装停机，从保留的旧快照向**另一空目录**重试。下列命令启动新版：在终端输入 `/sessions`，确认原会话可见。正常使用后退出、重启，再确认升级后新增的会话仍可读。
 
 ~~~powershell
 Set-Location -LiteralPath $new
 .\vastar.cmd
 ~~~
 
-**3. 需要回退时，先保存新版新增数据，再切回旧版。** 先退出新版，继续使用上述 PowerShell 窗口。下面的 restore 将完整的新快照验证并恢复到独立目录。只有恢复成功后才启动保留的旧安装。旧版继续使用升级前的历史；升级后新增的记录保留在新版、安全快照和 `new-restored` 中，不会自动并入旧库。
+**5. 需要回退时，先保存新版新增数据，再切回旧版。** 先退出新版，继续使用上述 PowerShell 窗口。下面的 restore 将完整的新快照验证并恢复到独立目录。只有恢复成功后才启动保留的旧安装。旧版继续使用升级前的历史；升级后新增的记录保留在新版、安全快照和 `new-restored` 中，不会自动并入旧库。
 
 ~~~powershell
 $newZip = Save-LocalState $new 'before-rollback'
@@ -125,6 +142,23 @@ if (Test-Path -LiteralPath '.\vastar.cmd') {
 回到旧终端后用 `/sessions` 核对原会话，再用 `/exit` 退出。早期公开版 `v2026-11-19` 需要同时配置 DeepSeek 和 GLM 的凭据才能启动；请沿用升级前可用的环境。今后切回新版时使用保留的新版安装，避免用旧库覆盖新版历史。
 
 ## 从 Git clone 开发（开发目录）
+
+在已初始化的项目中，运行 `vastar --show-paths` 可查看项目根、实际工作目录和 `instruction_files`。编码时会从执行根到当前目录定位项目约定，每层依次查找非空的 `AGENTS.override.md`、`AGENTS.md`、`agent.md`。指定 `--workspace` 时读取执行副本的约定。
+
+要从脚本发起项目只读检查，使用 `.\vastar.cmd --project <已初始化项目> --exec "概述项目入口及其依据"`，或将多行问题通过管道传给 `--exec -`。命令调用已配置的模型，输出包含回答和运行号的 JSON。退出码 0 表示本轮及工具调用成功，1 表示未完成或工具出现问题，2 表示参数或启动出错。
+
+需要实时进度时，加上 `--exec-events`，例如 `.\vastar.cmd --project <已初始化项目> --exec "检查入口" --exec-events`。每行 JSON 带序号、类型和运行号。开始、工具请求和工具结果实时输出，最后一条 `run.finished` 的 `receipt` 字段包含回答与持久化状态。参数或启动失败会写入标准错误并退出 2。
+
+要让脚本读取固定字段，给 `--exec` 加 `--output-schema result-schema.json`。例如要返回组件数，可将 `{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false}` 保存为 UTF-8 文件，再检查安装清单。schema 最多 64 KiB，支持 `type`、`properties`、`required`、`additionalProperties`、`items` 和 `enum`，会随问题发给模型。校验通过后从回执的 `structured_output` 读取值。重复键、非有限数和无法原值回传的小数会导致校验失败。回答无法通过时退出 1，`output_validation.reason` 说明原因，`answer` 和持久化状态保留。可与 `--exec-events` 合用。
+
+## 交付工作文件和代码修改
+
+首次使用某个工作目录时，用 `.\vastar.cmd --project <工作目录> --init-project` 建立项目身份。之后用 `.\vastar.cmd --project <工作目录>` 开始交互会话。
+
+- **报告和表格**。用 `/task new` 加上目标、输入文件和验收条件，例如“汇总 sales.csv 的销售额，交付按地区汇总的结果，注明未计入的行”。核对计划和预算后输入 `/task ok`、`/task run`。运行结束后用 `/task deliver` 核验文件。报告回执列出可打开的 Word、PDF 路径和产物引用。表格回执列出各组总额、原始行号、未计入原因和读取失败的工作表。以后可以用 `/task outputs` 重查已验收文件。
+- **编码**。在目标仓库的工作副本中说明可修改的文件、问题和验证命令。用 `/task new` 起草并确认计划后要求执行代码修改验证。工具会记录基线、逐项请求所需的执行确认，随后给出变更路径、差异和命令退出码。用 `/task status` 查看持久任务的状态。验证依赖当前 Windows 离线执行环境，项目需要的第三方工具或依赖若未装入验证副本，回执应保留该限制。 新初始化的 Git 仓库也可从第一份源文件开始，回执会标明尚无首提交的分支。
+
+需要显式调用专门流程时，在下一条任务输入前使用 `/skill code-change-validation`、`/skill spreadsheet-analysis` 或 `/skill report-generation`。
 
 开发者在仓库根目录用 Python 3.11+ 创建 `.venv`、安装 requirements.txt，按需从 config/settings.example.json 初始化个人配置；开发入口为 `.\vastar.cmd`，离线诊断为 `.venv/Scripts/python.exe -B scripts/doctor.py --json`。上述「从安装包安装」流程使用安装器提供的运行时。
 

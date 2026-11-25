@@ -141,11 +141,10 @@ class AttemptRunner:
         if finish == "needs_input":
             await self.terminate(s, RunState.INCOMPLETE, "needs_input")
             return True
-        if finish == "input_budget_exceeded":
-            # B06：工具续问/强制终答被预算闸门拦截（请求未发出）——如实收尾：
-            # 已产出内容保留为部分结果，拦截详情与建议随 run.ended.warnings 可见。
+        if finish in ("input_budget_exceeded", "incomplete_tool_batch"):
+            # 预算拦截或工具批次不完整：保留已有结果，停止本轮。
             s.result.partial = bool(outcome.has_content or outcome.has_reasoning)
-            await self.terminate(s, RunState.INCOMPLETE, "input_budget_exceeded")
+            await self.terminate(s, RunState.INCOMPLETE, finish)
             return True
         if finish == "length":
             # TASK-34：撞顶且续写启用 → 自动续写（core/continuation.py；硬上限 Y=2、

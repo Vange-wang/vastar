@@ -124,6 +124,10 @@ class ToolRoundTripper:
                 attempt_id, attempt_index)
         messages = list(llm_request.messages)
         while outcome.tool_calls is not None:
+            # Some compatible providers end complete native calls with "stop".
+            # Even valid JSON in a partial batch must not execute independently.
+            if outcome.finish_reason not in ("tool_calls", "stop"):
+                return await self._reject_unfinished_batch(s, outcome, attempt_id, attempt_index)
             if tools.max_tool_rounds is not None and s.tool_rounds >= tools.max_tool_rounds:
                 await self._emit_tool(s, EventType.TOOL_REJECTED, {
                     "tool": "<next_round>", "reason": "round_limit",
@@ -162,15 +166,8 @@ class ToolRoundTripper:
                                    messages=messages, params=dict(spec.params),
                                    timeouts=spec.timeouts, tools=llm_request.tools,
                                    meta={**llm_request.meta, "phase": "final_answer"})
-            from core.tools.rolling_context import roll_tool_history
-            messages, archive_ref = roll_tool_history(s, spec, follow_up, tools)
-            if archive_ref:
-                follow_up = replace(follow_up, messages=messages)
-                s.committed_messages = list(messages)
-                await self._emit_tool(s, EventType.CONTEXT_COMPACTED, {
-                    'kind': 'tool_archive', 'artifact_ref': archive_ref,
-                    'detail': '旧工具结果已完整归档，可分页回读；继续执行。'},
-                    attempt_id, attempt_index)
+            messages, follow_up = await self._compact_tool_history(
+                s, spec, follow_up, tools, attempt_id, attempt_index)
             follow_up.meta["_budget_policy"] = partial(
                 _gate_request, s, spec, follow_up, messages, follow_up.tools,
                 attempt_id=attempt_id, attempt_index=attempt_index, label="工具续问",
@@ -183,6 +180,18 @@ class ToolRoundTripper:
                     raise
                 return await self._force_final_answer(
                     s, spec, llm_request, attempt_id, attempt_index, outcome, messages=messages)
+        return outcome
+
+    async def _reject_unfinished_batch(self, s, outcome, attempt_id, attempt_index):
+        count = len(outcome.tool_calls)
+        finish = outcome.finish_reason
+        detail = f"工具请求未完整结束（{finish or '缺少结束信号'}），本批 {count} 项均未执行。"
+        await self._emit_tool(s, EventType.TOOL_REJECTED, {
+            "tool": "<batch>", "reason": "incomplete_tool_batch", "detail": detail,
+            "finish_reason": finish, "tool_call_count": count, "source": "model",
+        }, attempt_id, attempt_index)
+        s.warnings.append(detail)
+        outcome.finish_reason, outcome.tool_calls = "incomplete_tool_batch", None
         return outcome
 
     async def _trim_parallel(self, s: SharedState, calls: list,
@@ -327,6 +336,27 @@ class ToolRoundTripper:
                          attempt_id: str, attempt_index: int) -> None:
         await s.emit(s.factory.build(event_type, payload, channel=Channel.STATUS,
                                      attempt_id=attempt_id, request_epoch=attempt_index))
+
+    async def _compact_tool_history(self, s, spec, follow_up, tools, attempt_id, attempt_index):
+        """确定性压缩先行（TASK-166）：旧观察压成一行引用，仍超预算才落整组归档。"""
+        from core.tools.rolling_context import roll_tool_history, stub_old_tool_results
+        messages, stub_count = stub_old_tool_results(s, spec, follow_up, tools)
+        if stub_count:
+            follow_up = replace(follow_up, messages=messages)
+            s.committed_messages = list(messages)
+            await self._emit_tool(s, EventType.CONTEXT_COMPACTED, {
+                'kind': 'tool_stub', 'count': stub_count,
+                'detail': f'{stub_count} 条旧工具观察已压缩为一行引用，原文可分页回读；继续执行。'},
+                attempt_id, attempt_index)
+        messages, archive_ref = roll_tool_history(s, spec, follow_up, tools)
+        if archive_ref:
+            follow_up = replace(follow_up, messages=messages)
+            s.committed_messages = list(messages)
+            await self._emit_tool(s, EventType.CONTEXT_COMPACTED, {
+                'kind': 'tool_archive', 'artifact_ref': archive_ref,
+                'detail': '旧工具结果已完整归档，可分页回读；继续执行。'},
+                attempt_id, attempt_index)
+        return messages, follow_up
 
     def _waiting(self, s):
         service = getattr(self._tools, "task_service", None)

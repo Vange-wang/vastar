@@ -12,6 +12,7 @@ from pathlib import Path
 from core.maintenance_scan import LOG_SEGMENT, ScanBudget, ScanLimit
 from core.maintenance_scan import capacity as capacity
 from core.maintenance_snapshot import offline, safe
+from core.ownership import atomic_json
 
 
 def artifact_reason(con, row, rank, cfg, pending, now):
@@ -146,6 +147,67 @@ def plan(con, db, logs, backups, cfg, budget, planned, skipped):
     budget.check()
 
 
+def _apply_artifact_item(con, item):
+    """幂等清理一件产物：先删 blob、再删索引行并提交。
+
+    任一点中断都可由清理日志续清收口：unlink 失败 → 索引与文件均未动、下轮重试；
+    delete/commit 失败 → 回滚保行、blob 已删的悬挂行由续清补删；进程崩溃 → 日志重放。
+    """
+    Path(item["path"]).unlink(missing_ok=True)
+    try:
+        con.execute("delete from artifacts where artifact_id=? and version=?",
+                    (item["artifact_id"], item["version"]))
+        con.commit()
+    except sqlite3.Error:
+        try:
+            con.rollback()
+        except sqlite3.Error:
+            pass
+        raise
+
+
+def _prune_journal(db):
+    return db.with_name(db.name + ".prune-journal.json")
+
+
+def _journal_resume(con, db, skipped):
+    """续清上次中断遗留的 artifact 项（幂等重放）；返回 (已续清路径, 仍未完成项)。"""
+    journal = _prune_journal(db)
+    if not journal.exists():
+        return [], []
+    data = json.loads(journal.read_text(encoding="utf-8"))
+    if data.get("database") != str(db.resolve()):
+        raise ValueError("清理日志与数据库不匹配；保留现场，拒绝续清")
+    resumed, remaining = [], []
+    for item in data.get("items", []):
+        try:
+            _apply_artifact_item(con, item)
+        except (OSError, sqlite3.Error) as exc:
+            skipped.append([item["path"],
+                            f"resume pending: {type(exc).__name__}: {exc}（已留日志，下次续清）"])
+            remaining.append(item)
+        else:
+            resumed.append(item["path"])
+    if remaining:
+        atomic_json(journal, {**data, "items": remaining})
+    else:
+        journal.unlink(missing_ok=True)
+    return resumed, remaining
+
+
+def _record_prune_intent(db, journal, carry, planned):
+    pending = {item["path"]: item for item in carry}
+    for path, artifact in planned:
+        if artifact:
+            pending.setdefault(str(path), {"path": str(path),
+                                           "artifact_id": artifact[0],
+                                           "version": artifact[1]})
+    if pending:
+        atomic_json(journal, {"version": 1, "database": str(db.resolve()),
+                              "items": list(pending.values())})
+    return pending
+
+
 def prune(db, logs, backups, cfg, apply=False, budget=None):
     planned, skipped = [], []
     budget = budget or ScanBudget()
@@ -174,16 +236,50 @@ def prune(db, logs, backups, cfg, apply=False, budget=None):
             }
         finally:
             con.set_progress_handler(None, 0)
+        resumed, journal_pending = [], []
+        deleted = [str(path) for path, _ in planned]
         if apply:
+            # 意图日志 + 断点续清 + 逐条故障隔离（铁律「不静默」：失败必记、中断可续）：
+            # 先续清上次中断项，再把本批 artifact 意图落日志，逐条执行并即时核销；
+            # 单条失败记 skip 并留在日志（下轮重试），不再整批中断丢失报告。
+            resumed, carry = _journal_resume(con, db, skipped)
+            journal = _prune_journal(db)
+            pending = _record_prune_intent(db, journal, carry, planned)
+            deleted = []
             for path, artifact in planned:
+                try:
+                    if artifact:
+                        _apply_artifact_item(con, pending[str(path)])
+                    else:
+                        path.unlink()
+                except (OSError, sqlite3.Error) as exc:
+                    skipped.append([str(path),
+                                    f"delete failed: {type(exc).__name__}: {exc}"
+                                    + ("（已留日志，下次续清）" if artifact else "")])
+                    continue
+                deleted.append(str(path))
                 if artifact:
-                    con.execute("delete from artifacts where artifact_id=? and version=?", artifact)
-                    con.commit()
-                path.unlink()
+                    pending.pop(str(path), None)
+                    if pending:
+                        atomic_json(journal, {"version": 1, "database": str(db.resolve()),
+                                              "items": list(pending.values())})
+                    else:
+                        journal.unlink(missing_ok=True)
+            journal_pending = list(pending)
+        else:
+            journal = _prune_journal(db)
+            if journal.exists():
+                try:
+                    journal_pending = [item["path"] for item in json.loads(
+                        journal.read_text(encoding="utf-8")).get("items", [])]
+                except (OSError, ValueError):
+                    journal_pending = ["<journal unreadable>"]
     return {
         "complete": True,
         "visited": budget.visited,
         "applied": apply,
-        "delete": [str(path) for path, _ in planned],
+        "delete": deleted,
+        "resumed": resumed,
+        "journal_pending": journal_pending,
         "skip": skipped,
     }

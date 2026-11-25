@@ -1,6 +1,12 @@
 """schema 定义；迁移模块的唯一 DDL 来源（B16：schema 3 增 artifacts 元数据表）。"""
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
+
+EVENT_WM_BLOCKS_DDL = """CREATE TABLE IF NOT EXISTS event_wm_blocks (
+  block_end INTEGER PRIMARY KEY,
+  count INTEGER NOT NULL,
+  hash TEXT NOT NULL
+);"""  # TASK-174 blocks:v1 派生块表（可丢可重建）
 
 ARTIFACTS_DDL = """CREATE TABLE IF NOT EXISTS artifacts (
   artifact_id TEXT NOT NULL,

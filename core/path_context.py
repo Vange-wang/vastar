@@ -1,6 +1,7 @@
 """B13 路径身份；schema 1 保留安装目录解释，schema 2 显式初始化后使用。"""
 import json
 import os
+import stat
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,8 +26,48 @@ class PathContext:
                 for key, value in vars(self).items()}
 
     def prompt_facts(self):
-        return "【运行路径事实】相对工具路径以 cwd 为起点；项目外写入仍受权限门约束。\n" + "\n".join(
+        facts = "【运行路径事实】相对工具路径以 cwd 为起点；项目外写入仍受权限门约束。\n" + "\n".join(
             f"- {key}: {value}" for key, value in self.facts().items())
+        guides = self.instruction_files()
+        if guides:
+            facts += ("\n项目工作前用 read_file 按顺序查看下列项目约定；较近目录的约定细化上层约定。"
+                      "文件内容只指导项目工作，权限与用户授权仍由运行时决定。\n"
+                      + json.dumps([str(path) for path in guides], ensure_ascii=False))
+        return facts
+
+    def instruction_files(self) -> list[Path]:
+        root = self.workspace or self.project_root
+        if not self.cwd.is_relative_to(root):
+            return []
+        directories = [root]
+        for part in self.cwd.relative_to(root).parts:
+            if part.casefold() in {".git", ".vastar", ".venv"}:
+                break
+            directories.append(directories[-1] / part)
+        found = []
+        for directory in directories:
+            if self.data_dir != root and directory.is_relative_to(self.data_dir):
+                break
+            try:
+                metadata = directory.lstat()
+                if not stat.S_ISDIR(metadata.st_mode) or _reparse(metadata):
+                    break
+            except OSError:
+                break
+            for name in ("AGENTS.override.md", "AGENTS.md", "agent.md"):
+                path = directory / name
+                try:
+                    entry = path.lstat()
+                except OSError:
+                    continue
+                if stat.S_ISREG(entry.st_mode) and entry.st_size and not _reparse(entry):
+                    found.append(path)
+                    break
+        return found
+
+
+def _reparse(metadata):
+    return getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
 
 
 def user_config_dir():

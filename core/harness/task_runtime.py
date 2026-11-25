@@ -30,7 +30,8 @@ class TaskRuntime:
                 raise ValueError("步骤依赖变化或未完成，拒绝派发")
             if any(q["required"] for q in QuestionService(self.tasks).pending(task["task_id"])) and not step["independent"]:
                 raise ValueError("等待用户；没有获计划允许的独立工作")
-            if self.store._conn.execute("SELECT 1 FROM tool_operations WHERE task_id=? AND state IN ('prepared','executing','unknown')", (task["task_id"],)).fetchone():
+            from core.skills.code_change_delivery import unaccounted_operations
+            if unaccounted_operations(self.store, task):
                 raise ValueError("未决操作须先 reconcile，禁止自动重试")
             row = self.snapshot(task["task_id"])
             if row["recovery_error"]:

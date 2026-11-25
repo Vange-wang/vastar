@@ -33,6 +33,18 @@ def capabilities():
                for ext in ("doc", "docm", "xlsm", "png", "jpg", "jpeg", "tiff", "unknown")}}
 
 
+def stage_python_runtime(work):
+    """Stage CPython and the standard library into a private process package."""
+    base, runtime = Path(sys.base_prefix), work / "python"
+    runtime.mkdir()
+    for child in base.iterdir():
+        if child.name == "python.exe" or child.suffix.lower() == ".dll":
+            shutil.copy2(child, runtime / child.name)
+    for name in ("DLLs", "Lib"):
+        shutil.copytree(base / name, runtime / name,
+                        ignore=shutil.ignore_patterns("site-packages", "__pycache__", "test", "tests"))
+
+
 class DocumentPayload:
     def __init__(self, path, *, first=1, count=5, ocr=False):
         if type(first) is not int or first < 1 or type(count) is not int or not 1 <= count <= 10:
@@ -57,14 +69,7 @@ class DocumentPayload:
         with (work / "source").open("wb") as target:
             if fingerprint(self.path, target) != self.before:
                 raise ValueError("source changed before isolated parsing")
-        base, runtime = Path(sys.base_prefix), work / "python"
-        runtime.mkdir()
-        for child in base.iterdir():
-            if child.name == "python.exe" or child.suffix.lower() == ".dll":
-                shutil.copy2(child, runtime / child.name)
-        for name in ("DLLs", "Lib"):
-            shutil.copytree(base / name, runtime / name,
-                            ignore=shutil.ignore_patterns("site-packages", "__pycache__", "test", "tests"))
+        stage_python_runtime(work)
         shutil.copy2(Path(__file__).with_name("document_worker.py"), work / "worker.py")
         (work / "request.json").write_text(json.dumps(self.manifest), encoding="utf-8")
         if self.kind == "pdf":

@@ -25,6 +25,8 @@ D级执行许可与每条命令的真实确认仍由原底座处理。Skill 激�
    基线HEAD、完整可见dirty清单和diff由真实隔离进程读取，不能由模型填入。已有用户修改的目标拒绝写；
    不抹除/覆盖它，改用用户明确选择的干净隔离workspace，或另行人工合并。
 2. workspace 必须已经存在。需要worktree时明确路径和起点，由外部授权操作建立；本工具不执行Git写命令。
+   已有提交时回执的 base_revision 是该提交 SHA。刚 git init 且没有引用的仓库也可锁定，
+   此时 base_revision 为 null，unborn_ref 给出本地分支全名。已有未跟踪文件仍受原 dirty 检查保护。
    禁自动stash/clean、checkout .、宽泛restore/reset。清理前停所有在途进程并核实回执；
    若有.venv等联接，先核实它确为联接并只拆联接，再移除worktree，绝不递归跟随联接。
    本工具保留验证副本证据，不自动清理或提交。
@@ -45,5 +47,14 @@ D级执行许可与每条命令的真实确认仍由原底座处理。Skill 激�
    同命令基线绿而修改后红=疑似回归；基线也红=既有或环境问题；无基线=未分类，保留复现命令和输出。
    环境/探针失败不能当产品通过。ready_for_review仍须检查diff与验收目标，不是独立验收PASS。
 7. 交付列明范围、base_revision、原dirty保留、实际命令/退出码/产物、diff、未解决项和限制。
+   scope 是锁定范围；commit_paths 仅列相对锁定时实际改变的路径。file_changes 逐项区分新增、修改、删除，
+   并给出前后 SHA-256（缺少文件的一侧为 null）。从 evidence 回读文本差异；二进制、非 UTF-8 或
+   超过预览上限的文件仅提供变更类型和哈希，须另行检查内容。
    只逐个显式git add自己的文件，禁止目录/通配符；每层完成即提交。已发命令不能随代码回退撤销。
    关闭Skill不删证据，不影响普通对话；已启动任务先read/terminate再回退。
+8. 需要用任务命令交付时，计划先冻结 code_check 验收项。workspace 填绝对路径，scope 填与 lock
+   相同的相对路径清单，command 填 checks 中一条完整命令。可用 changed_paths 约定必须实际改变的路径。
+   每个编码步骤使用自己的 change_id。在当前步骤内锁定、编辑、验证并报告。明确拒绝启动命令后，
+   可以再次显式 verify 并重新确认；没有启动或终止回单的未知进程仍须核实。
+   Run 结束后执行 /task deliver，或指定该验收项的 operation_id 为 report 返回的 scope_operation_id。
+   验收会核查完整范围、文件写入和命令的真实回单。/task outputs 在重启后仍可重新核对磁盘字节。

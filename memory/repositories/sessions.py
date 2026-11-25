@@ -23,3 +23,10 @@ class SessionRepository:
             messages = [dict(r) for r in self._conn.execute(
                 'SELECT * FROM messages WHERE session_id=? ORDER BY created_at, rowid', (session_id,))]
             return dict(row), messages
+
+    def assistant_text(self, session_id, message_id):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT content FROM messages WHERE session_id=? AND message_id=? AND role='assistant'",
+                (session_id, message_id)).fetchone()
+        return row["content"] if row else ""

@@ -149,6 +149,12 @@ def _parse_args(args: dict) -> tuple[int, int, int]:
     return start, max_lines, budget
 
 
+def _check_start(start: int, path: Path, lines: int, size: int) -> None:
+    if start > lines:
+        raise ToolParamError(f"start_line={start} 超出总行数 {lines}——显式拒绝；"
+                             + _plan_hint(path, lines, size))
+
+
 def run(args: dict, *, resolved_path: Path, resolved_extra=None,
         project_root=None, skip=None, op_context=None) -> str:
     """范围读取。resolved_path 由执行层解析；行口径与 search_text 一致（1-based）。
@@ -172,6 +178,7 @@ def run(args: dict, *, resolved_path: Path, resolved_extra=None,
             control.facts["read_window"] = {"start_line": 0, "end_line": 0, "total_lines": 0,
                                             "total_bytes": 0, "read_bytes": 0, "complete": True}
             return "（空文件，共 0 行 0 字节）"
+        _check_start(start, resolved_path, total_lines, total_bytes)
         end = min(start - 1 + max_lines, total_lines)
         chunk = data[offsets[start - 1]:offsets[end] if end < total_lines else total_bytes]
         while len(chunk) > budget and end > start:
@@ -188,10 +195,7 @@ def run(args: dict, *, resolved_path: Path, resolved_extra=None,
                        offsets[end] if end < total_lines else total_bytes)
     # 大文件路径：行索引（流式扫描 + 缓存）→ seek 定点读（任何时刻不持全文缓冲）
     total_bytes, total_lines, offsets = _line_index(resolved_path)
-    if start > total_lines:
-        raise ToolParamError(
-            f"start_line={start} 超出总行数 {total_lines}——显式拒绝；"
-            + _plan_hint(resolved_path, total_lines, total_bytes))
+    _check_start(start, resolved_path, total_lines, total_bytes)
     end = min(start - 1 + max_lines, total_lines)
     while end > start and offsets[end] - offsets[start - 1] > budget:
         end -= 1                              # 字节阀整行回退（行边界对齐）

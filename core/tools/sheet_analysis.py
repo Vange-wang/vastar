@@ -11,11 +11,65 @@ def numeric(cells):
 def aggregate(cells):
     values = numeric(cells)
     with localcontext() as ctx:
-        ctx.prec = 100
+        # Reserve every decimal place plus space for a carry across all rows.
+        # This matters when a small transaction lies between two cancelling large ones.
+        if values:
+            ctx.prec = max(100, max(v.adjusted() for v in values) - min(v.as_tuple().exponent for v in values)
+                           + len(str(len(values))) + 1)
         total = sum(values, Decimal(0))
+        ctx.prec = 100
         return {'count': len(values), 'sum': str(total) if values else None,
                 'mean': str(total / len(values)) if values else None,
                 'min': str(min(values)) if values else None, 'max': str(max(values)) if values else None}
+
+
+def grouped(rows, selection, units, cleaning_failures):
+    """Keep source rows and literal typed keys. No inferred unit conversions."""
+    key_col, val_col = selection['key_column'], selection['value_column']
+    invalid = {f['source_row'] for f in cleaning_failures if f['column'] in (key_col, val_col)}
+    groups, excluded = {}, []
+    for row in rows:
+        row_id, cells = row['source_row'], row['cells']
+        reason = None
+        if row_id in invalid:
+            reason = '分组列或数值列清洗失败'
+        elif len(cells) < max(key_col, val_col):
+            reason = '缺少分组列或数值列'
+        else:
+            key, value = cells[key_col - 1], cells[val_col - 1]
+            if key['kind'] not in {'text', 'date', 'number', 'boolean'}:
+                reason = '缺失或不可用的分组值：' + key['kind']
+            elif value['kind'] != 'number':
+                reason = '非数值：' + value['kind']
+        if reason:
+            excluded.append({'source_row': row_id, 'reason': reason})
+            continue
+        identity = (key['kind'], key['value'], key.get('unit'), key.get('timezone'))
+        groups.setdefault(identity, []).append((row_id, value))
+
+    output = []
+    for (kind, label, key_unit, timezone), items in groups.items():
+        source_rows = [idx for idx, _ in items]
+        values = [value for _, value in items]
+        value_units = {v.get('unit', units.get(str(val_col), '未声明')) for v in values}
+        entry = {'key': {'kind': kind, 'value': label, 'unit': key_unit, 'timezone': timezone},
+                 'source_rows': source_rows}
+        try:
+            if len(value_units) != 1:
+                raise ValueError('同组数值单位不一致')
+            stats = aggregate(values)
+            oracle = sum((Fraction(v['value']) for v in values), Fraction(0))
+            if Fraction(stats['sum']) != oracle:
+                raise ValueError('分组金额逐行分数复算不一致')
+            entry.update(unit=next(iter(value_units)), aggregate=stats, verified_sum=True)
+        except (ValueError, ArithmeticError) as exc:
+            excluded.extend({'source_row': idx, 'reason': str(exc)} for idx in source_rows)
+            entry.update(aggregate=None, verified_sum=False, error=str(exc))
+        output.append(entry)
+    covered = len(rows) - len(excluded)
+    status = 'completed' if not excluded else 'partial' if covered else 'incomplete'
+    return {**selection, 'status': status, 'input_rows': len(rows), 'included_rows': covered,
+            'excluded': sorted(excluded, key=lambda e: e['source_row']), 'groups': output}
 
 
 def crosscheck(cells):
@@ -34,7 +88,8 @@ def crosscheck(cells):
     if count:
         with localcontext() as ctx:
             ctx.prec = 100
-            oracle_mean = Decimal(total.numerator) / Decimal(total.denominator) / count
+            mean = total / count
+            oracle_mean = Decimal(mean.numerator) / Decimal(mean.denominator)
         if (Decimal(primary['mean']) != oracle_mean or Fraction(primary['min']) != min(values)
                 or Fraction(primary['max']) != max(values)):
             raise ValueError('独立均值/极值复算不一致')

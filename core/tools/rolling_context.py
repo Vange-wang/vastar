@@ -1,11 +1,15 @@
 """Archive complete tool exchanges before the context window fills, never raw truncation."""
 import json
+import re
 from dataclasses import replace
 
 from core.artifacts import ArtifactError
 from core.harness.preflight import context_decision
 from core.history_capture import protected_call
 from core.tools.sensitive_result import protected_result
+
+_STUB_MIN_CHARS = 600   # 低于此不压（压缩收益不抵引用替换成本）
+_REF_RE = re.compile(r'\[大输出引用 (artifact://\S+?)\]')
 
 _MEMORY_TOOLS = {'search_history', 'write_memory', 'forget_memory', 'read_project_knowledge'}
 _ARCHIVABLE = {'read_file', 'list_dir', 'stat_path', 'glob_files', 'search_text', 'read_artifact'}
@@ -37,6 +41,77 @@ def _marker(ref, excerpt):
         f'完整原文与调用配对：{ref}。需要细节时用 read_artifact 分页回读；'
         '不得把未回读细节当作已知事实。继续完成原用户任务。\n'
         f'最近归档观察的短预览（不是全文）：{excerpt}')}
+
+
+def _all_groups(messages):
+    """全部 assistant(tool_calls)+tool 配对组（不限工具白名单）；供 stub 的最新组保护定位。"""
+    groups, index = [], 0
+    while index < len(messages):
+        calls = messages[index].get('tool_calls') or []
+        if messages[index].get('role') == 'assistant' and calls:
+            end = index + 1 + len(calls)
+            replies = messages[index + 1:end]
+            if (len(replies) == len(calls)
+                    and all(m.get('role') == 'tool' for m in replies)
+                    and [m.get('tool_call_id') for m in replies] == [c.get('id') for c in calls]):
+                groups.append(list(range(index, end)))
+                index = end
+                continue
+        index += 1
+    return groups
+
+
+def stub_old_tool_results(s, spec, request, tools):
+    """确定性压缩先行（TASK-166）：非最新一轮的超大 tool 观察在投影层压成一行 stub。
+
+    只改发给模型的投影；已提交 exchange 记录与存储原文不动（红线①）。
+    stub 必含可回读 artifact 引用并由调用方显式计数（V2 禁静默）。
+    """
+    messages = request.messages
+    if not tools.rolling_tool_history or not tools.registry.is_enabled('read_artifact'):
+        return messages, None
+    decision = context_decision(s, spec, request)
+    if decision.allowed and decision.gate_tokens <= decision.budget * .8:
+        return messages, None
+    if decision.error and decision.error.code != 'CONTEXT_BUDGET_EXCEEDED':
+        return messages, None
+    artifacts = tools.artifacts
+    if artifacts is None or not artifacts.available() or s.request.cancel_event.is_set():
+        return messages, None
+    groups = _all_groups(messages)
+    if not groups:
+        return messages, None
+    protected = set(groups[-1])     # 最新一轮整段保护（hermes turn 保护等价）
+    calls_by_id = {c.get('id'): c for m in messages for c in (m.get('tool_calls') or [])}
+    candidate, stubbed = list(messages), 0
+    for i, message in enumerate(messages):
+        if i in protected or message.get('role') != 'tool':
+            continue
+        content = message.get('content') or ''
+        call = calls_by_id.get(message.get('tool_call_id'))
+        name = ((call or {}).get('function') or {}).get('name', '?')
+        if len(content) < _STUB_MIN_CHARS or protected_result(name, content):
+            continue
+        # TASK-166 复核条件②：调用侧敏感（.env/凭据路径、敏感记忆）同样不 stub（与 _groups 双查口径一致）
+        if call is not None and protected_call(call, tools.cwd or tools.project_root):
+            continue
+        match = _REF_RE.search(content)
+        if match:
+            ref = match.group(1)    # 入库时已截断留引用（history_capture），直接复用不再归档
+        else:
+            try:
+                meta = artifacts.put(content.encode('utf-8'), source_ref='', retention='permanent')
+                artifacts.page_by_ref(meta.uri, page_size=1)   # 回读校验后才替换（同归档口径）
+                ref = meta.uri
+            except (ArtifactError, OSError) as exc:
+                s.warnings.append(f'旧观察归档失败，保留原文：{type(exc).__name__}')
+                return messages, None
+        stub = dict(message)
+        stub['content'] = (f'[{name}] 观察已归档 {ref}（原文 {len(content)} 字符）；'
+                           '需要细节用 read_artifact 分页回读，不得把未回读细节当作已知事实。')
+        candidate[i] = stub
+        stubbed += 1
+    return (candidate, stubbed) if stubbed else (messages, None)
 
 
 def roll_tool_history(s, spec, request, tools):

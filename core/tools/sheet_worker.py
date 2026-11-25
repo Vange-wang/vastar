@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sheet_analysis import analyze  # noqa: E402
+from sheet_analysis import analyze, grouped  # noqa: E402
 from sheet_cleaning import clean, profile  # noqa: E402
 from sheet_reader import read  # noqa: E402
 
@@ -21,8 +21,19 @@ def run(request):
         stats, charts, failures = analyze(cleaned, request['options']['units'])
         for drawing in charts:
             drawing['sample_scope'] = sheet['name'] + ': ' + drawing['sample_scope']
-        results.append({**sheet, 'header': header, 'identification': identification, 'cleaned': cleaned,
-                        'method': method, 'results': stats, 'charts': charts, 'analysis_failures': failures})
+        report = {**sheet, 'header': header, 'identification': identification, 'cleaned': cleaned,
+                  'method': method, 'results': stats, 'charts': charts, 'analysis_failures': failures}
+        selection = request['options'].get('group_by')
+        if selection and not sheet.get('error'):
+            summary = grouped(cleaned, selection, request['options']['units'], method['failures'])
+            width = max((len(row['cells']) for row in rows), default=0)
+            if max(selection.values()) > width:
+                summary.update(status='incomplete', error='请求的分组列或数值列不在工作表中')
+            report['grouped'] = summary
+            if summary['status'] != 'completed':
+                failures.append({'stage': 'group_by', 'reason': summary.get('error') or '有行未计入分组汇总',
+                                 'excluded_rows': len(summary['excluded'])})
+        results.append(report)
     return {'status': 'partial' if any(s.get('error') or s['method']['failures'] or s['analysis_failures']
                                       for s in results) else 'completed',
             'sheets': results, 'limitations': limitations + ['描述性统计，不从相关性推导因果；因果待独立证据',
